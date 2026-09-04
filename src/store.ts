@@ -1,6 +1,8 @@
 import { create } from "zustand";
-import type { ChatMessage, Document, Note } from "./types";
-import { chatApi, documentsApi, notesApi } from "./api";
+import type { ChatMessage, Document, Note, SearchResult } from "./types";
+import { chatApi, documentsApi, notesApi, type StreamEvent } from "./api";
+
+type Theme = "light" | "dark";
 
 interface AppState {
   documents: Document[];
@@ -12,6 +14,11 @@ interface AppState {
   isLoading: boolean;
   error: string | null;
   isChatResponding: boolean;
+  streamedResponse: string | null;
+  searchQuery: string;
+  searchResults: SearchResult[];
+  isSearching: boolean;
+  theme: Theme;
 
   loadAll: () => Promise<void>;
   addDocument: (path: string) => Promise<void>;
@@ -29,6 +36,19 @@ interface AppState {
   setError: (error: string | null) => void;
   sendChatMessage: (message: string) => Promise<void>;
   clearChat: () => Promise<void>;
+  search: (query: string) => Promise<void>;
+  openSearchResult: (documentId: number) => void;
+  clearSearch: () => void;
+  toggleTheme: () => void;
+}
+
+function loadTheme(): Theme {
+  try {
+    const saved = localStorage.getItem("lumenote-theme");
+    return saved === "dark" ? "dark" : "light";
+  } catch {
+    return "light";
+  }
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -41,6 +61,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   isLoading: false,
   error: null,
   isChatResponding: false,
+  streamedResponse: null,
+  searchQuery: "",
+  searchResults: [],
+  isSearching: false,
+  theme: loadTheme(),
 
   loadAll: async () => {
     set({ isLoading: true, error: null });
@@ -63,6 +88,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         documents: [doc, ...s.documents],
         viewedDocumentId: doc.id,
       }));
+      await get().search(get().searchQuery);
     } catch (e) {
       set({ error: String(e) });
     }
@@ -77,6 +103,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           s.selectedDocumentId === id ? null : s.selectedDocumentId,
         viewedDocumentId: s.viewedDocumentId === id ? null : s.viewedDocumentId,
       }));
+      await get().search(get().searchQuery);
     } catch (e) {
       set({ error: String(e) });
     }
@@ -137,15 +164,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  selectDocument: (id) => set({ selectedDocumentId: id }),
-  selectNote: (id) => set({ selectedNoteId: id }),
+  selectDocument: (id) => set({ selectedDocumentId: id, selectedNoteId: null }),
+  selectNote: (id) => set({ selectedNoteId: id, selectedDocumentId: null }),
   setError: (error) => set({ error }),
 
   sendChatMessage: async (message) => {
     const { chat, selectedDocumentId, documents } = get();
     if (!message.trim() || get().isChatResponding) return;
 
-    set({ isChatResponding: true, error: null });
+    set({ isChatResponding: true, error: null, streamedResponse: null });
     try {
       const userMsg: ChatMessage = {
         id: Date.now(),
@@ -159,14 +186,39 @@ export const useAppStore = create<AppState>((set, get) => ({
         ? [selectedDocumentId]
         : documents.map((d) => d.id);
 
-      const response = await chatApi.send(message, activeDocIds);
+      const aiMsgId = Date.now() + 1;
       const aiMsg: ChatMessage = {
-        id: Date.now() + 1,
+        id: aiMsgId,
         role: "assistant",
-        content: response,
+        content: "",
         created_at: new Date().toISOString(),
       };
       set({ chat: [...get().chat, aiMsg] });
+
+      let accumulated = "";
+
+      const onEvent = (event: StreamEvent) => {
+        if (event.type === "chunk" && event.text) {
+          accumulated += event.text;
+          set({
+            chat: get().chat.map((m) =>
+              m.id === aiMsgId ? { ...m, content: accumulated } : m,
+            ),
+            streamedResponse: accumulated,
+          });
+        } else if (event.type === "error" && event.message) {
+          set({ error: event.message, isChatResponding: false });
+        }
+      };
+
+      await chatApi.stream(message, activeDocIds, onEvent);
+
+      set({
+        chat: get().chat.map((m) =>
+          m.id === aiMsgId ? { ...m, content: accumulated } : m,
+        ),
+        streamedResponse: null,
+      });
     } catch (e) {
       set({ error: String(e) });
     } finally {
@@ -181,5 +233,43 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (e) {
       set({ error: String(e) });
     }
+  },
+
+  search: async (query) => {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      set({ searchQuery: query, searchResults: [], isSearching: false });
+      return;
+    }
+    set({ searchQuery: query, isSearching: true });
+    try {
+      const results = await documentsApi.search(trimmed);
+      set({ searchResults: results, isSearching: false });
+    } catch (e) {
+      set({ error: String(e), isSearching: false });
+    }
+  },
+
+  openSearchResult: (documentId) => {
+    set({
+      selectedDocumentId: documentId,
+      selectedNoteId: null,
+      viewedDocumentId: documentId,
+    });
+  },
+
+  clearSearch: () => {
+    set({ searchQuery: "", searchResults: [] });
+  },
+
+  toggleTheme: () => {
+    const next: Theme = get().theme === "dark" ? "light" : "dark";
+    try {
+      localStorage.setItem("lumenote-theme", next);
+    } catch {
+      /* ignore */
+    }
+    set({ theme: next });
+    document.documentElement.classList.toggle("dark", next === "dark");
   },
 }));

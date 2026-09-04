@@ -16,6 +16,12 @@ export default function Sidebar() {
     createNote,
     viewedDocumentId,
     setError,
+    searchQuery,
+    searchResults,
+    isSearching,
+    search,
+    openSearchResult,
+    clearSearch,
   } = useAppStore();
 
   const [docExpanded, setDocExpanded] = useState(true);
@@ -48,10 +54,10 @@ export default function Sidebar() {
   };
 
   return (
-    <aside className="w-72 min-w-72 bg-white border-r border-gray-200 flex flex-col h-full">
+    <aside className="w-72 min-w-72 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col h-full">
       {/* Header */}
-      <div className="p-4 border-b border-gray-200">
-        <h1 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+      <div className="p-4 border-b border-gray-200 dark:border-gray-800">
+        <h1 className="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
           <span className="w-6 h-6 rounded-md bg-blue-600 flex items-center justify-center text-white text-xs font-bold">
             AI
           </span>
@@ -59,12 +65,78 @@ export default function Sidebar() {
         </h1>
       </div>
 
+      {/* Search */}
+      <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800">
+        <div className="relative">
+          <svg
+            className="w-4 h-4 text-gray-400 absolute left-3 top-2.5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M21 21l-4.35-4.35M17 10a7 7 0 11-14 0 7 7 0 0114 0z"
+            />
+          </svg>
+          <input
+            value={searchQuery}
+            onChange={(e) => search(e.target.value)}
+            placeholder="Поиск по источникам..."
+            className="w-full bg-gray-100 dark:bg-gray-800 rounded-lg pl-9 pr-8 py-2 text-sm text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 dark:placeholder:text-gray-500"
+          />
+          {searchQuery && (
+            <button
+              onClick={clearSearch}
+              className="absolute right-2 top-2 w-5 h-5 flex items-center justify-center text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              title="Очистить"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        {isSearching && (
+          <p className="text-xs text-gray-400 mt-2 px-1">Поиск...</p>
+        )}
+
+        {!isSearching && searchQuery.trim() !== "" && searchResults.length === 0 && (
+          <p className="text-xs text-gray-400 mt-2 px-1 italic">
+            Ничего не найдено
+          </p>
+        )}
+
+        {!isSearching && searchResults.length > 0 && (
+          <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">
+            {searchResults.map((r, i) => (
+              <button
+                key={`${r.document_id}-${i}`}
+                onClick={() => openSearchResult(r.document_id)}
+                className="w-full text-left px-2 py-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-gray-800"
+              >
+                <p className="text-xs font-medium text-blue-700 dark:text-blue-400 truncate">
+                  {r.title}
+                </p>
+                <p
+                  className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2 break-words"
+                  dangerouslySetInnerHTML={{ __html: r.snippet }}
+                />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="flex-1 overflow-y-auto">
         {/* Sources */}
-        <div className="border-b border-gray-100">
+        <div className="border-b border-gray-100 dark:border-gray-800">
           <div className="flex items-center justify-between px-4 py-3">
             <button
-              className="flex items-center gap-2 text-sm font-medium text-gray-700"
+              className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300"
               onClick={() => setDocExpanded(!docExpanded)}
             >
               <svg
@@ -75,13 +147,13 @@ export default function Sidebar() {
               >
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
               </svg>
-              <span className="text-xs uppercase tracking-wide text-gray-500">
+              <span className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
                 Источники ({documents.length})
               </span>
             </button>
             <button
               onClick={handleAddDocument}
-              className="w-6 h-6 rounded hover:bg-gray-100 flex items-center justify-center text-gray-500 hover:text-gray-700"
+              className="w-6 h-6 rounded hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center justify-center text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
               title="Добавить документ"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -100,27 +172,27 @@ export default function Sidebar() {
                 documents.map((doc) => (
                   <div
                     key={doc.id}
-                    className="group flex items-center gap-2 px-4 py-2 hover:bg-gray-50 cursor-pointer"
+                    className="group flex items-center gap-2 px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
                     onClick={() => selectDocument(doc.id)}
                   >
                     <div
                       className={`flex-1 min-w-0 rounded px-1 py-0.5 ${
                         selectedDocumentId === doc.id
-                          ? "bg-blue-50"
+                          ? "bg-blue-50 dark:bg-blue-900/40"
                           : viewedDocumentId === doc.id
-                            ? "bg-gray-50"
+                            ? "bg-gray-50 dark:bg-gray-800"
                             : ""
                       }`}
                     >
-                      <p className="text-sm text-gray-800 truncate">{doc.title}</p>
-                      <p className="text-xs text-gray-400">{doc.file_type.toUpperCase()}</p>
+                      <p className="text-sm text-gray-800 dark:text-gray-200 truncate">{doc.title}</p>
+                      <p className="text-xs text-gray-400 dark:text-gray-500">{doc.file_type.toUpperCase()}</p>
                     </div>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         deleteDocument(doc.id);
                       }}
-                      className="opacity-0 group-hover:opacity-100 w-6 h-6 flex items-center justify-center text-gray-400 hover:text-red-500"
+                      className="opacity-0 group-hover:opacity-100 w-6 h-6 flex items-center justify-center text-gray-400 dark:text-gray-500 hover:text-red-500"
                       title="Удалить"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -138,7 +210,7 @@ export default function Sidebar() {
         <div>
           <div className="flex items-center justify-between px-4 py-3">
             <button
-              className="flex items-center gap-2 text-sm font-medium text-gray-700"
+              className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300"
               onClick={() => setNotesExpanded(!notesExpanded)}
             >
               <svg
@@ -149,13 +221,13 @@ export default function Sidebar() {
               >
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
               </svg>
-              <span className="text-xs uppercase tracking-wide text-gray-500">
+              <span className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
                 Заметки ({notes.length})
               </span>
             </button>
             <button
               onClick={handleNewNote}
-              className="w-6 h-6 rounded hover:bg-gray-100 flex items-center justify-center text-gray-500 hover:text-gray-700"
+              className="w-6 h-6 rounded hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center justify-center text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
               title="Новая заметка"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -174,18 +246,18 @@ export default function Sidebar() {
                 notes.map((note) => (
                   <div
                     key={note.id}
-                    className="group flex items-center gap-2 px-4 py-2 hover:bg-gray-50 cursor-pointer"
+                    className="group flex items-center gap-2 px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
                     onClick={() => selectNote(note.id)}
                   >
                     <div
                       className={`flex-1 min-w-0 rounded px-1 py-0.5 ${
-                        selectedNoteId === note.id ? "bg-blue-50" : ""
+                        selectedNoteId === note.id ? "bg-blue-50 dark:bg-blue-900/40" : ""
                       }`}
                     >
-                      <p className="text-sm text-gray-800 truncate">
+                      <p className="text-sm text-gray-800 dark:text-gray-200 truncate">
                         {note.title || "Без названия"}
                       </p>
-                      <p className="text-xs text-gray-400">
+                      <p className="text-xs text-gray-400 dark:text-gray-500">
                         {note.content
                           ? note.content.slice(0, 40)
                           : "Пустая заметка"}
@@ -197,7 +269,7 @@ export default function Sidebar() {
                         e.stopPropagation();
                         deleteNote(note.id);
                       }}
-                      className="opacity-0 group-hover:opacity-100 w-6 h-6 flex items-center justify-center text-gray-400 hover:text-red-500"
+                      className="opacity-0 group-hover:opacity-100 w-6 h-6 flex items-center justify-center text-gray-400 dark:text-gray-500 hover:text-red-500"
                       title="Удалить"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

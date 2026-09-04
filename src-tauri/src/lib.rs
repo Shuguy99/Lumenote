@@ -2,6 +2,7 @@ mod ai;
 mod commands;
 mod db;
 mod parser;
+mod rag;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -24,6 +25,8 @@ pub fn run() {
             commands::get_chat_history,
             commands::clear_chat_history,
             commands::send_chat_message,
+            commands::stream_chat_message,
+            commands::search_documents,
             commands::get_settings,
             commands::save_settings,
         ])

@@ -45,3 +45,14 @@ export interface SaveSettingsInput {
   temperature: number;
   max_tokens: number;
 }
+
+export interface SearchResult {
+  document_id: number;
+  title: string;
+  snippet: string;
+  match_index: number;
+}
+
+export interface ThemeSettings {
+  theme: "light" | "dark";
+}

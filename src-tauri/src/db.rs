@@ -164,6 +164,92 @@ pub fn delete_document(conn: &Connection, id: i64) -> rusqlite::Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Serialize)]
+pub struct SearchResult {
+    pub document_id: i64,
+    pub title: String,
+    pub snippet: String,
+    pub match_index: i64,
+}
+
+pub fn search_documents(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+) -> rusqlite::Result<Vec<SearchResult>> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn.prepare(
+        "SELECT id, title, content FROM documents ORDER BY created_at DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+
+    let mut results: Vec<SearchResult> = Vec::new();
+    for r in rows {
+        let (id, title, content) = r?;
+        let content_lower = content.to_lowercase();
+        let mut search_from = 0usize;
+        let mut found_in_doc = 0usize;
+
+        while let Some(rel) = content_lower[search_from..].find(&q) {
+            let abs_pos = search_from + rel;
+            let start = abs_pos.saturating_sub(120);
+            let end = (abs_pos + q.len() + 120).min(content.len());
+
+            let safe_start = prev_char_boundary(&content, start);
+            let safe_end = next_char_boundary(&content, end);
+            let snippet: String = content[safe_start..safe_end]
+                .chars()
+                .take(400)
+                .collect::<String>()
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            results.push(SearchResult {
+                document_id: id,
+                title: title.clone(),
+                snippet,
+                match_index: found_in_doc as i64,
+            });
+
+            found_in_doc += 1;
+            search_from = abs_pos + 1;
+            if found_in_doc >= 5 || results.len() >= limit {
+                break;
+            }
+        }
+        if results.len() >= limit {
+            break;
+        }
+    }
+    Ok(results)
+}
+
+fn prev_char_boundary(s: &str, mut idx: usize) -> usize {
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+fn next_char_boundary(s: &str, mut idx: usize) -> usize {
+    while idx < s.len() && !s.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
+}
+
 pub fn insert_note(
     conn: &Connection,
     title: &str,

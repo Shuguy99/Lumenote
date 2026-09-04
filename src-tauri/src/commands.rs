@@ -1,6 +1,7 @@
 use crate::ai::{self, AiSettings};
 use crate::db::{self, ChatMessage, Document, Note};
 use crate::parser;
+use crate::rag;
 
 fn open_conn() -> Result<rusqlite::Connection, String> {
     rusqlite::Connection::open(db::db_path()).map_err(|e| e.to_string())
@@ -163,6 +164,12 @@ pub fn clear_chat_history() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn search_documents(query: String) -> Result<Vec<db::SearchResult>, String> {
+    let conn = open_conn()?;
+    db::search_documents(&conn, &query, 20).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn send_chat_message(
     message: String,
     document_ids: Vec<i64>,
@@ -195,12 +202,58 @@ pub async fn send_chat_message(
         return Err("AI API key is not configured. Open Settings to configure it.".to_string());
     }
 
-    let response = ai::chat_completion(&settings, &messages, &docs).await?;
+    let context = rag::build_context(&docs, &message, 3000);
+    let response = ai::chat_completion_with_context(&settings, &messages, &docs, &context).await?;
 
     let conn = open_conn()?;
     db::insert_chat_message(&conn, "assistant", &response).map_err(|e| e.to_string())?;
 
     Ok(response)
+}
+
+#[tauri::command]
+pub async fn stream_chat_message(
+    message: String,
+    document_ids: Vec<i64>,
+    on_event: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<(), String> {
+    let conn = open_conn()?;
+
+    db::insert_chat_message(&conn, "user", &message).map_err(|e| e.to_string())?;
+
+    let mut docs = Vec::new();
+    for id in &document_ids {
+        if let Ok(Some(doc)) = db::get_document(&conn, *id) {
+            docs.push((doc.title, doc.content));
+        }
+    }
+
+    let history = db::get_chat_messages(&conn).map_err(|e| e.to_string())?;
+    drop(conn);
+
+    let mut messages: Vec<(String, String)> = Vec::new();
+    let start = history.len().saturating_sub(40);
+    for msg in history.iter().skip(start) {
+        messages.push((msg.role.clone(), msg.content.clone()));
+    }
+
+    let conn = open_conn()?;
+    let settings = extract_settings(&conn)?;
+    drop(conn);
+
+    if settings.api_key.is_empty() && settings.provider != "ollama" {
+        return Err("AI API key is not configured. Open Settings to configure it.".to_string());
+    }
+
+    let context = rag::build_context(&docs, &message, 3000);
+    let result = ai::stream_chat_completion(&settings, &messages, &docs, &context, on_event).await?;
+
+    if !result.is_empty() {
+        let conn2 = open_conn()?;
+        db::insert_chat_message(&conn2, "assistant", &result).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

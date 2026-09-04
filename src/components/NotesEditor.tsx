@@ -37,7 +37,7 @@ export default function NotesEditor() {
 
   if (!note) {
     return (
-      <div className="flex-1 h-full flex flex-col items-center justify-center bg-gray-50 text-gray-400">
+      <div className="flex-1 h-full flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-900 text-gray-400">
         <svg className="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
             strokeLinecap="round"
@@ -52,22 +52,24 @@ export default function NotesEditor() {
   }
 
   return (
-    <div className="flex-1 h-full flex flex-col bg-white">
-      <div className="border-b border-gray-200 px-6 py-3 flex items-center justify-between">
+    <div className="flex-1 h-full flex flex-col bg-white dark:bg-gray-900">
+      <div className="border-b border-gray-200 dark:border-gray-800 px-6 py-3 flex items-center justify-between">
         <div className="flex-1 pr-4">
           <input
             value={title}
             onChange={(e) => handleTitleChange(e.target.value)}
-            className="w-full text-lg font-semibold text-gray-800 bg-transparent outline-none"
+            className="w-full text-lg font-semibold text-gray-800 dark:text-gray-100 bg-transparent outline-none"
             placeholder="Заголовок заметки"
           />
         </div>
         <div className="flex items-center gap-2">
-          <div className="bg-gray-100 rounded-lg flex">
+          <div className="bg-gray-100 dark:bg-gray-800 rounded-lg flex">
             <button
               onClick={() => setMode("edit")}
               className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                mode === "edit" ? "bg-white shadow" : "text-gray-600"
+                mode === "edit"
+                  ? "bg-white dark:bg-gray-700 shadow dark:text-gray-100"
+                  : "text-gray-600 dark:text-gray-400"
               }`}
             >
               Редактор
@@ -75,7 +77,9 @@ export default function NotesEditor() {
             <button
               onClick={() => setMode("preview")}
               className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                mode === "preview" ? "bg-white shadow" : "text-gray-600"
+                mode === "preview"
+                  ? "bg-white dark:bg-gray-700 shadow dark:text-gray-100"
+                  : "text-gray-600 dark:text-gray-400"
               }`}
             >
               Просмотр
@@ -103,11 +107,11 @@ export default function NotesEditor() {
           <textarea
             value={content}
             onChange={(e) => handleContentChange(e.target.value)}
-            className="w-full h-full min-h-64 bg-transparent text-sm text-gray-800 outline-none resize-none font-sans leading-relaxed"
+            className="w-full h-full min-h-64 bg-transparent text-sm text-gray-800 dark:text-gray-100 outline-none resize-none font-sans leading-relaxed placeholder:text-gray-400 dark:placeholder:text-gray-500"
             placeholder="Пишите в Markdown... (поддерживаются # заголовки, **жирный**, списки и т.д.)"
           />
         ) : (
-          <div className="markdown-body text-sm text-gray-800">
+          <div className="markdown-body text-sm text-gray-800 dark:text-gray-100">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>
               {content || "*Пустая заметка*"}
             </ReactMarkdown>
@@ -115,7 +119,7 @@ export default function NotesEditor() {
         )}
       </div>
 
-      <div className="px-6 py-2 text-xs text-gray-400 border-t border-gray-100">
+      <div className="px-6 py-2 text-xs text-gray-400 dark:text-gray-500 border-t border-gray-100 dark:border-gray-800">
         Последнее обновление: {note.updated_at}
       </div>
     </div>

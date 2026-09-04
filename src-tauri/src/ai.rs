@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use futures_util::StreamExt;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub enum Provider {
@@ -58,8 +59,25 @@ fn default_headers(provider: &Provider, api_key: &str) -> Vec<(String, String)> 
     }
 }
 
-fn build_system_prompt(documents: &Vec<(String, String)>) -> String {
+fn documents_as_context(documents: &Vec<(String, String)>) -> String {
     if documents.is_empty() {
+        return String::new();
+    }
+    let mut context = String::new();
+    for (i, (title, content)) in documents.iter().enumerate() {
+        let truncated: String = content.chars().take(12000).collect();
+        context.push_str(&format!(
+            "\n--- Document {}: {} ---\n{}\n",
+            i + 1,
+            title,
+            truncated
+        ));
+    }
+    context
+}
+
+fn build_system_prompt(context: &str) -> String {
+    if context.trim().is_empty() {
         return "You are a helpful AI assistant in a notebook application. Answer concisely and accurately.".to_string();
     }
 
@@ -71,16 +89,7 @@ fn build_system_prompt(documents: &Vec<(String, String)>) -> String {
          === DOCUMENTS ===\n",
     );
 
-    for (i, (title, content)) in documents.iter().enumerate() {
-        let truncated: String = content.chars().take(12000).collect();
-        prompt.push_str(&format!(
-            "\n--- Document {}: {} ---\n{}\n",
-            i + 1,
-            title,
-            truncated
-        ));
-    }
-
+    prompt.push_str(context);
     prompt.push_str("\n=== END DOCUMENTS ===\n");
 
     prompt
@@ -91,12 +100,30 @@ pub async fn chat_completion(
     messages: &Vec<(String, String)>,
     documents: &Vec<(String, String)>,
 ) -> Result<String, String> {
+    let context = documents_as_context(documents);
+    run_chat_completion(settings, messages, &context).await
+}
+
+pub async fn chat_completion_with_context(
+    settings: &AiSettings,
+    messages: &Vec<(String, String)>,
+    _documents: &Vec<(String, String)>,
+    context: &str,
+) -> Result<String, String> {
+    run_chat_completion(settings, messages, context).await
+}
+
+async fn run_chat_completion(
+    settings: &AiSettings,
+    messages: &Vec<(String, String)>,
+    context: &str,
+) -> Result<String, String> {
     let provider = settings.get_provider();
 
     let mut api_messages: Vec<serde_json::Value> = Vec::new();
     api_messages.push(json!({
         "role": "system",
-        "content": build_system_prompt(documents)
+        "content": build_system_prompt(context)
     }));
     for (role, content) in messages {
         api_messages.push(json!({
@@ -301,3 +328,275 @@ fn truncate(s: &str, max: usize) -> String {
         t
     }
 }
+
+pub async fn stream_chat_completion(
+    settings: &AiSettings,
+    messages: &Vec<(String, String)>,
+    _documents: &Vec<(String, String)>,
+    context: &str,
+    channel: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<String, String> {
+    let provider = settings.get_provider();
+
+    let mut api_messages: Vec<serde_json::Value> = Vec::new();
+    api_messages.push(json!({
+        "role": "system",
+        "content": build_system_prompt(context)
+    }));
+    for (role, content) in messages {
+        api_messages.push(json!({
+            "role": role,
+            "content": content
+        }));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    match provider {
+        Provider::OpenAI => openai_stream(&client, settings, &mut api_messages, &channel).await,
+        Provider::Anthropic => anthropic_stream(&client, settings, &mut api_messages, &channel).await,
+        Provider::Ollama => ollama_stream(&client, settings, &mut api_messages, &channel).await,
+    }
+}
+
+async fn openai_stream(
+    client: &reqwest::Client,
+    settings: &AiSettings,
+    messages: &mut Vec<serde_json::Value>,
+    channel: &tauri::ipc::Channel<serde_json::Value>,
+) -> Result<String, String> {
+    let base_url = settings
+        .base_url
+        .clone()
+        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+
+    let body = json!({
+        "model": settings.model,
+        "messages": messages,
+        "temperature": settings.temperature,
+        "max_tokens": settings.max_tokens,
+        "stream": true
+    });
+
+    let resp = client
+        .post(&url)
+        .headers(build_headers(provider_headers(&Provider::OpenAI, &settings.api_key)))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("OpenAI stream request failed: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp
+            .text()
+            .await
+            .unwrap_or_default();
+        let _ = channel.send(json!({"type": "error", "message": format!("OpenAI API error ({}): {}", status, truncate(&text, 500))}));
+        return Err(format!("OpenAI API error ({}): {}", status, truncate(&text, 500)));
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    let mut result = String::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Stream read error: {}", e))?;
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+
+        loop {
+            let pos = match buf.find('\n') {
+                Some(p) => p,
+                None => break,
+            };
+            let line = buf[..pos].trim().to_string();
+            buf.drain(..pos + 1);
+
+            if line.is_empty() || !line.starts_with("data:") {
+                continue;
+            }
+            let data = line[5..].trim();
+            if data == "[DONE]" {
+                break;
+            }
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                if let Some(delta) = parsed["choices"][0]["delta"]["content"].as_str() {
+                    result.push_str(delta);
+                    let _ = channel.send(json!({"type": "chunk", "text": delta}));
+                }
+            }
+        }
+    }
+
+    let _ = channel.send(json!({"type": "done", "text": result}));
+    Ok(result)
+}
+
+async fn anthropic_stream(
+    client: &reqwest::Client,
+    settings: &AiSettings,
+    messages: &mut Vec<serde_json::Value>,
+    channel: &tauri::ipc::Channel<serde_json::Value>,
+) -> Result<String, String> {
+    let base_url = settings
+        .base_url
+        .clone()
+        .unwrap_or_else(|| "https://api.anthropic.com/v1".to_string());
+    let url = format!("{}/messages", base_url.trim_end_matches('/'));
+
+    let system = messages
+        .iter()
+        .find(|m| m["role"] == "system")
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or("");
+
+    let user_messages: Vec<serde_json::Value> = messages
+        .iter()
+        .filter(|m| m["role"] != "system")
+        .cloned()
+        .collect();
+
+    let body = json!({
+        "model": settings.model,
+        "system": system,
+        "messages": user_messages,
+        "max_tokens": settings.max_tokens,
+        "temperature": settings.temperature,
+        "stream": true
+    });
+
+    let resp = client
+        .post(&url)
+        .headers(build_headers(provider_headers(&Provider::Anthropic, &settings.api_key)))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Anthropic stream request failed: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp
+            .text()
+            .await
+            .unwrap_or_default();
+        let _ = channel.send(json!({"type": "error", "message": format!("Anthropic API error ({}): {}", status, truncate(&text, 500))}));
+        return Err(format!("Anthropic API error ({}): {}", status, truncate(&text, 500)));
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    let mut result = String::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Stream read error: {}", e))?;
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+
+        loop {
+            let pos = match buf.find('\n') {
+                Some(p) => p,
+                None => break,
+            };
+            let line = buf[..pos].trim().to_string();
+            buf.drain(..pos + 1);
+
+            if line.is_empty() {
+                continue;
+            }
+            if !line.starts_with("data:") || line == "data: [DONE]" {
+                continue;
+            }
+            let data = line[5..].trim();
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                if parsed["type"] == "content_block_delta" {
+                    if let Some(delta) = parsed["delta"]["text"].as_str() {
+                        result.push_str(delta);
+                        let _ = channel.send(json!({"type": "chunk", "text": delta}));
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = channel.send(json!({"type": "done", "text": result}));
+    Ok(result)
+}
+
+async fn ollama_stream(
+    client: &reqwest::Client,
+    settings: &AiSettings,
+    messages: &mut Vec<serde_json::Value>,
+    channel: &tauri::ipc::Channel<serde_json::Value>,
+) -> Result<String, String> {
+    let base_url = settings
+        .base_url
+        .clone()
+        .unwrap_or_else(|| "http://localhost:11434".to_string());
+    let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
+
+    let body = json!({
+        "model": settings.model,
+        "messages": messages,
+        "stream": true,
+        "options": {
+            "temperature": settings.temperature,
+            "num_predict": settings.max_tokens
+        }
+    });
+
+    let resp = client
+        .post(&url)
+        .headers(build_headers(provider_headers(&Provider::Ollama, "")))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Ollama stream request failed: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp
+            .text()
+            .await
+            .unwrap_or_default();
+        let _ = channel.send(json!({"type": "error", "message": format!("Ollama API error ({}): {}", status, truncate(&text, 500))}));
+        return Err(format!("Ollama API error ({}): {}", status, truncate(&text, 500)));
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    let mut result = String::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Stream read error: {}", e))?;
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+
+        loop {
+            let pos = match buf.find('\n') {
+                Some(p) => p,
+                None => break,
+            };
+            let line = buf[..pos].trim().to_string();
+            buf.drain(..pos + 1);
+
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&line) {
+                if let Some(delta) = parsed["message"]["content"].as_str() {
+                    result.push_str(delta);
+                    let _ = channel.send(json!({"type": "chunk", "text": delta}));
+                }
+                if parsed.get("done").and_then(|d| d.as_bool()) == Some(true) {
+                    break;
+                }
+            }
+        }
+    }
+
+    let _ = channel.send(json!({"type": "done", "text": result}));
+    Ok(result)
+}
+
