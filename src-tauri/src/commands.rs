@@ -1,0 +1,268 @@
+use crate::ai::{self, AiSettings};
+use crate::db::{self, ChatMessage, Document, Note};
+use crate::parser;
+
+fn open_conn() -> Result<rusqlite::Connection, String> {
+    rusqlite::Connection::open(db::db_path()).map_err(|e| e.to_string())
+}
+
+fn extract_settings(conn: &rusqlite::Connection) -> Result<AiSettings, String> {
+    let provider = db::get_setting(conn, "ai_provider").map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "openai".into());
+    let api_key = db::get_setting(conn, "ai_api_key").map_err(|e| e.to_string())?.unwrap_or_default();
+    let model = db::get_setting(conn, "ai_model").map_err(|e| e.to_string())?
+        .unwrap_or_else(|| default_model_for(&provider));
+    let base_url = db::get_setting(conn, "ai_base_url").map_err(|e| e.to_string())?;
+    let temperature = db::get_setting(conn, "ai_temperature").map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "0.7".into());
+    let max_tokens = db::get_setting(conn, "ai_max_tokens").map_err(|e| e.to_string())?
+        .unwrap_or_else(|| "2000".into());
+
+    Ok(AiSettings {
+        provider,
+        api_key,
+        model,
+        base_url,
+        temperature: temperature.parse().unwrap_or(0.7),
+        max_tokens: max_tokens.parse().unwrap_or(2000),
+    })
+}
+
+fn default_model_for(provider: &str) -> String {
+    match provider {
+        "anthropic" => "claude-3-5-sonnet-latest".into(),
+        "ollama" => "llama3".into(),
+        _ => "gpt-4o".into(),
+    }
+}
+
+#[tauri::command]
+pub fn load_documents() -> Result<Vec<Document>, String> {
+    let conn = open_conn()?;
+    db::get_documents(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn add_document(path: String) -> Result<Document, String> {
+    let file_path = std::path::PathBuf::from(&path);
+    if !file_path.exists() {
+        return Err(format!("File not found: {}", path));
+    }
+
+    let content = parser::parse_file(&file_path)?;
+    let title = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("untitled")
+        .to_string();
+    let file_type = parser::get_file_type(&file_path);
+    let size = parser::get_file_size(&file_path)?;
+
+    let conn = open_conn()?;
+    let id = db::insert_document(&conn, &title, &path, &content, &file_type, size)
+        .map_err(|e| e.to_string())?;
+    let doc = db::get_document(&conn, id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Document not found after insert".to_string())?;
+    drop(conn);
+
+    let settings = {
+        let conn = open_conn()?;
+        extract_settings(&conn)?
+    };
+    if !settings.api_key.is_empty() || settings.provider == "ollama" {
+        let doc = doc.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = generate_summary_internal(&settings, &doc).await;
+        });
+    }
+
+    Ok(doc)
+}
+
+async fn generate_summary_internal(settings: &AiSettings, doc: &Document) -> Result<(), String> {
+    let text = &doc.content;
+    let truncated: String = text.chars().take(12000).collect();
+    let messages = vec![(
+        "user".to_string(),
+        format!(
+            "Create a concise summary of the following document (3-5 bullet points maximum):\n\n{}",
+            truncated
+        ),
+    )];
+
+    let summary = ai::chat_completion(settings, &messages, &vec![]).await?;
+
+    if let Ok(conn) = rusqlite::Connection::open(db::db_path()) {
+        let _ = db::update_document_summary(&conn, doc.id, &summary);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_document(id: i64) -> Result<Option<Document>, String> {
+    let conn = open_conn()?;
+    db::get_document(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_document(id: i64) -> Result<(), String> {
+    let conn = open_conn()?;
+    db::delete_document(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_notes() -> Result<Vec<Note>, String> {
+    let conn = open_conn()?;
+    db::get_notes(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_note(id: i64) -> Result<Option<Note>, String> {
+    let conn = open_conn()?;
+    db::get_note(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn create_note(
+    title: String,
+    content: String,
+    document_id: Option<i64>,
+) -> Result<i64, String> {
+    let conn = open_conn()?;
+    db::insert_note(&conn, &title, &content, document_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn edit_note(
+    id: i64,
+    title: String,
+    content: String,
+    document_id: Option<i64>,
+) -> Result<(), String> {
+    let conn = open_conn()?;
+    db::update_note(&conn, id, &title, &content, document_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_note(id: i64) -> Result<(), String> {
+    let conn = open_conn()?;
+    db::delete_note(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_chat_history() -> Result<Vec<ChatMessage>, String> {
+    let conn = open_conn()?;
+    db::get_chat_messages(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn clear_chat_history() -> Result<(), String> {
+    let conn = open_conn()?;
+    db::clear_chat(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn send_chat_message(
+    message: String,
+    document_ids: Vec<i64>,
+) -> Result<String, String> {
+    let conn = open_conn()?;
+
+    db::insert_chat_message(&conn, "user", &message).map_err(|e| e.to_string())?;
+
+    let mut docs = Vec::new();
+    for id in &document_ids {
+        if let Ok(Some(doc)) = db::get_document(&conn, *id) {
+            docs.push((doc.title, doc.content));
+        }
+    }
+
+    let history = db::get_chat_messages(&conn).map_err(|e| e.to_string())?;
+    drop(conn);
+
+    let mut messages: Vec<(String, String)> = Vec::new();
+    let start = history.len().saturating_sub(40);
+    for msg in history.iter().skip(start) {
+        messages.push((msg.role.clone(), msg.content.clone()));
+    }
+
+    let conn = open_conn()?;
+    let settings = extract_settings(&conn)?;
+    drop(conn);
+
+    if settings.api_key.is_empty() && settings.provider != "ollama" {
+        return Err("AI API key is not configured. Open Settings to configure it.".to_string());
+    }
+
+    let response = ai::chat_completion(&settings, &messages, &docs).await?;
+
+    let conn = open_conn()?;
+    db::insert_chat_message(&conn, "assistant", &response).map_err(|e| e.to_string())?;
+
+    Ok(response)
+}
+
+#[tauri::command]
+pub fn get_settings() -> Result<serde_json::Value, String> {
+    let conn = open_conn()?;
+    let settings = AiSettings {
+        provider: db::get_setting(&conn, "ai_provider").map_err(|e| e.to_string())?
+            .unwrap_or_else(|| "openai".into()),
+        api_key: db::get_setting(&conn, "ai_api_key").map_err(|e| e.to_string())?.unwrap_or_default(),
+        model: db::get_setting(&conn, "ai_model").map_err(|e| e.to_string())?
+            .unwrap_or_else(|| "gpt-4o".into()),
+        base_url: db::get_setting(&conn, "ai_base_url").map_err(|e| e.to_string())?,
+        temperature: db::get_setting(&conn, "ai_temperature").map_err(|e| e.to_string())?
+            .unwrap_or_else(|| "0.7".into())
+            .parse()
+            .unwrap_or(0.7),
+        max_tokens: db::get_setting(&conn, "ai_max_tokens").map_err(|e| e.to_string())?
+            .unwrap_or_else(|| "2000".into())
+            .parse()
+            .unwrap_or(2000),
+    };
+    drop(conn);
+
+    let masked = |k: &str| {
+        if k.is_empty() {
+            String::new()
+        } else if k.len() > 8 {
+            format!("{}...{}", &k[..4], &k[k.len() - 4..])
+        } else {
+            "****".to_string()
+        }
+    };
+
+    Ok(serde_json::json!({
+        "provider": settings.provider,
+        "api_key_masked": masked(&settings.api_key),
+        "has_api_key": !settings.api_key.is_empty(),
+        "api_key": settings.api_key,
+        "model": settings.model,
+        "base_url": settings.base_url,
+        "temperature": settings.temperature,
+        "max_tokens": settings.max_tokens,
+    }))
+}
+
+#[tauri::command]
+pub fn save_settings(
+    provider: String,
+    api_key: String,
+    model: String,
+    base_url: Option<String>,
+    temperature: f32,
+    max_tokens: u32,
+) -> Result<(), String> {
+    let conn = open_conn()?;
+    db::set_setting(&conn, "ai_provider", &provider).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "ai_api_key", &api_key).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "ai_model", &model).map_err(|e| e.to_string())?;
+    if let Some(bu) = &base_url {
+        db::set_setting(&conn, "ai_base_url", bu).map_err(|e| e.to_string())?;
+    }
+    db::set_setting(&conn, "ai_temperature", &temperature.to_string()).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "ai_max_tokens", &max_tokens.to_string()).map_err(|e| e.to_string())?;
+    Ok(())
+}
