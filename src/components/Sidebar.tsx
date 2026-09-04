@@ -257,12 +257,19 @@ export default function Sidebar() {
                       <p className="text-sm text-gray-800 dark:text-gray-200 truncate">
                         {note.title || "Без названия"}
                       </p>
-                      <p className="text-xs text-gray-400 dark:text-gray-500">
+                      <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
                         {note.content
                           ? note.content.slice(0, 40)
                           : "Пустая заметка"}
                         {note.content.length > 40 ? "..." : ""}
                       </p>
+                      {note.document_id != null && (
+                        <p className="text-[11px] text-blue-500 dark:text-blue-400 truncate">
+                          ↳{" "}
+                          {documents.find((d) => d.id === note.document_id)
+                            ?.title ?? "документ"}
+                        </p>
+                      )}
                     </div>
                     <button
                       onClick={(e) => {

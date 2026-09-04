@@ -129,9 +129,10 @@ pub fn create_note(
     title: String,
     content: String,
     document_id: Option<i64>,
+    anchor: Option<String>,
 ) -> Result<i64, String> {
     let conn = open_conn()?;
-    db::insert_note(&conn, &title, &content, document_id).map_err(|e| e.to_string())
+    db::insert_note(&conn, &title, &content, document_id, anchor).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -140,9 +141,10 @@ pub fn edit_note(
     title: String,
     content: String,
     document_id: Option<i64>,
+    anchor: Option<String>,
 ) -> Result<(), String> {
     let conn = open_conn()?;
-    db::update_note(&conn, id, &title, &content, document_id).map_err(|e| e.to_string())
+    db::update_note(&conn, id, &title, &content, document_id, anchor).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

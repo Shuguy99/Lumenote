@@ -1,5 +1,12 @@
 import { create } from "zustand";
-import type { ChatMessage, Document, Note, SearchResult } from "./types";
+import type {
+  ChatMessage,
+  CitationHighlight,
+  Document,
+  Note,
+  NoteAnchor,
+  SearchResult,
+} from "./types";
 import { chatApi, documentsApi, notesApi, type StreamEvent } from "./api";
 
 type Theme = "light" | "dark";
@@ -11,6 +18,7 @@ interface AppState {
   selectedDocumentId: number | null;
   selectedNoteId: number | null;
   viewedDocumentId: number | null;
+  citation: CitationHighlight | null;
   isLoading: boolean;
   error: string | null;
   isChatResponding: boolean;
@@ -23,16 +31,23 @@ interface AppState {
   loadAll: () => Promise<void>;
   addDocument: (path: string) => Promise<void>;
   deleteDocument: (id: number) => Promise<void>;
-  createNote: (title: string, content: string) => Promise<void>;
+  createNote: (
+    title: string,
+    content: string,
+    documentId?: number | null,
+    anchor?: NoteAnchor | null,
+  ) => Promise<void>;
   updateNote: (
     id: number,
     title: string,
     content: string,
     documentId: number | null,
+    anchor: string | null,
   ) => Promise<void>;
   deleteNote: (id: number) => Promise<void>;
-  selectDocument: (id: number | null) => void;
+  selectDocument: (id: number | null, citation?: CitationHighlight | null) => void;
   selectNote: (id: number | null) => void;
+  setCitation: (citation: CitationHighlight | null) => void;
   setError: (error: string | null) => void;
   sendChatMessage: (message: string) => Promise<void>;
   clearChat: () => Promise<void>;
@@ -58,6 +73,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedDocumentId: null,
   selectedNoteId: null,
   viewedDocumentId: null,
+  citation: null,
   isLoading: false,
   error: null,
   isChatResponding: false,
@@ -109,16 +125,22 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  createNote: async (title, content) => {
+  createNote: async (title, content, documentId = null, anchor = null) => {
     try {
-      const id = await notesApi.create(title, content, null);
+      const id = await notesApi.create(
+        title,
+        content,
+        documentId,
+        anchor ? JSON.stringify(anchor) : null,
+      );
       set((s) => ({
         notes: [
           {
             id,
             title,
             content,
-            document_id: null,
+            document_id: documentId,
+            anchor: anchor ? JSON.stringify(anchor) : null,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           },
@@ -131,9 +153,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  updateNote: async (id, title, content, documentId) => {
+  updateNote: async (id, title, content, documentId, anchor) => {
     try {
-      await notesApi.update(id, title, content, documentId);
+      await notesApi.update(id, title, content, documentId, anchor);
       set((s) => ({
         notes: s.notes.map((n) =>
           n.id === id
@@ -142,6 +164,7 @@ export const useAppStore = create<AppState>((set, get) => ({
                 title,
                 content,
                 document_id: documentId,
+                anchor,
                 updated_at: new Date().toISOString(),
               }
             : n,
@@ -164,8 +187,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  selectDocument: (id) => set({ selectedDocumentId: id, selectedNoteId: null }),
+  selectDocument: (id, citation = null) =>
+    set({
+      selectedDocumentId: id,
+      selectedNoteId: null,
+      citation: citation ?? null,
+    }),
   selectNote: (id) => set({ selectedNoteId: id, selectedDocumentId: null }),
+  setCitation: (citation) => set({ citation }),
   setError: (error) => set({ error }),
 
   sendChatMessage: async (message) => {

@@ -21,6 +21,7 @@ pub struct Note {
     pub title: String,
     pub content: String,
     pub document_id: Option<i64>,
+    pub anchor: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -67,6 +68,7 @@ pub fn init_db() -> rusqlite::Result<Connection> {
             title TEXT NOT NULL,
             content TEXT NOT NULL DEFAULT '',
             document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+            anchor TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -84,6 +86,14 @@ pub fn init_db() -> rusqlite::Result<Connection> {
         );
         ",
     )?;
+
+    let has_anchor = conn.prepare("PRAGMA table_info(notes)")?.query_map([], |r| {
+        r.get::<_, String>(1)
+    })?.filter_map(|r| r.ok()).any(|c| c == "anchor");
+    if !has_anchor {
+        conn.execute_batch("ALTER TABLE notes ADD COLUMN anchor TEXT;")?;
+    }
+
     Ok(conn)
 }
 
@@ -255,10 +265,11 @@ pub fn insert_note(
     title: &str,
     content: &str,
     document_id: Option<i64>,
+    anchor: Option<String>,
 ) -> rusqlite::Result<i64> {
     conn.execute(
-        "INSERT INTO notes (title, content, document_id) VALUES (?1, ?2, ?3)",
-        params![title, content, document_id],
+        "INSERT INTO notes (title, content, document_id, anchor) VALUES (?1, ?2, ?3, ?4)",
+        params![title, content, document_id, anchor],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -269,18 +280,19 @@ pub fn update_note(
     title: &str,
     content: &str,
     document_id: Option<i64>,
+    anchor: Option<String>,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "UPDATE notes SET title = ?1, content = ?2, document_id = ?3, updated_at = datetime('now')
-         WHERE id = ?4",
-        params![title, content, document_id, id],
+        "UPDATE notes SET title = ?1, content = ?2, document_id = ?3, anchor = ?4, updated_at = datetime('now')
+         WHERE id = ?5",
+        params![title, content, document_id, anchor, id],
     )?;
     Ok(())
 }
 
 pub fn get_notes(conn: &Connection) -> rusqlite::Result<Vec<Note>> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, content, document_id, created_at, updated_at
+        "SELECT id, title, content, document_id, anchor, created_at, updated_at
          FROM notes ORDER BY updated_at DESC",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -289,8 +301,9 @@ pub fn get_notes(conn: &Connection) -> rusqlite::Result<Vec<Note>> {
             title: row.get(1)?,
             content: row.get(2)?,
             document_id: row.get(3)?,
-            created_at: row.get(4)?,
-            updated_at: row.get(5)?,
+            anchor: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
         })
     })?;
 
@@ -303,7 +316,7 @@ pub fn get_notes(conn: &Connection) -> rusqlite::Result<Vec<Note>> {
 
 pub fn get_note(conn: &Connection, id: i64) -> rusqlite::Result<Option<Note>> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, content, document_id, created_at, updated_at
+        "SELECT id, title, content, document_id, anchor, created_at, updated_at
          FROM notes WHERE id = ?1",
     )?;
     let mut rows = stmt.query_map(params![id], |row| {
@@ -312,8 +325,9 @@ pub fn get_note(conn: &Connection, id: i64) -> rusqlite::Result<Option<Note>> {
             title: row.get(1)?,
             content: row.get(2)?,
             document_id: row.get(3)?,
-            created_at: row.get(4)?,
-            updated_at: row.get(5)?,
+            anchor: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
         })
     })?;
     rows.next().transpose()

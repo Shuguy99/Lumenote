@@ -15,8 +15,38 @@ export interface Note {
   title: string;
   content: string;
   document_id: number | null;
+  anchor: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface NoteAnchor {
+  offset: number;
+  length: number;
+  text: string;
+}
+
+export interface CitationHighlight {
+  documentId: number;
+  offset: number;
+  length: number;
+}
+
+export function parseAnchor(json: string | null): NoteAnchor | null {
+  if (!json) return null;
+  try {
+    const v = JSON.parse(json);
+    if (
+      typeof v.offset === "number" &&
+      typeof v.length === "number" &&
+      typeof v.text === "string"
+    ) {
+      return { offset: v.offset, length: v.length, text: v.text };
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
 }
 
 export interface ChatMessage {

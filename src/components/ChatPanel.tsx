@@ -1,7 +1,83 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useAppStore } from "../store";
+import { findTextOffset } from "../anchors";
+
+const CITATION_RE = /\[Doc:\s*([^\]]+)\]/g;
+
+function processCitations(content: string): string {
+  let result = "";
+  let last = 0;
+  let m: RegExpExecArray | null;
+  CITATION_RE.lastIndex = 0;
+  while ((m = CITATION_RE.exec(content))) {
+    const title = m[1].trim();
+    if (!title) continue;
+    const ctxStart = Math.max(0, m.index - 200);
+    const ctx = content.slice(ctxStart, m.index).trim().split("\n").pop()?.slice(-150) ?? "";
+    const href = `cite://${encodeURIComponent(title)}|${encodeURIComponent(ctx)}`;
+    result += content.slice(last, m.index);
+    result += `[${m[0]}]( ${href} )`;
+    last = m.index + m[0].length;
+  }
+  result += content.slice(last);
+  return result;
+}
+
+function CitationLink({
+  href,
+  children,
+}: {
+  href: string;
+  children: ReactNode;
+}) {
+  const { documents, selectDocument, setError } = useAppStore();
+
+  if (!href.startsWith("cite://")) {
+    return <a href={href}>{children}</a>;
+  }
+
+  const handleClick = () => {
+    const raw = href.slice("cite://".length);
+    const sep = raw.indexOf("|");
+    const title = decodeURIComponent(raw.slice(0, sep === -1 ? raw.length : sep));
+    const ctx = sep === -1 ? "" : decodeURIComponent(raw.slice(sep + 1));
+
+    const doc =
+      documents.find((d) => d.title.toLowerCase() === title.toLowerCase()) ??
+      documents.find((d) =>
+        d.title.toLowerCase().includes(title.toLowerCase()),
+      ) ??
+      documents.find((d) => title.toLowerCase().includes(d.title.toLowerCase()));
+
+    if (!doc) {
+      setError(`Документ не найден: ${title}`);
+      return;
+    }
+
+    const offset = ctx ? findTextOffset(doc.content, ctx) : -1;
+    if (offset >= 0) {
+      selectDocument(doc.id, {
+        documentId: doc.id,
+        offset,
+        length: ctx.length,
+      });
+    } else {
+      selectDocument(doc.id, null);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      className="text-blue-600 dark:text-blue-400 hover:underline font-medium cursor-pointer"
+      title="Открыть фрагмент документа"
+    >
+      {children}
+    </button>
+  );
+}
 
 export default function ChatPanel() {
   const {
@@ -121,8 +197,18 @@ export default function ChatPanel() {
             >
               {msg.role === "assistant" ? (
                 <div className="markdown-body text-sm">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {msg.content}
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      a: ({ href, children }) => {
+                        const h = typeof href === "string" ? href : "";
+                        return (
+                          <CitationLink href={h}>{children}</CitationLink>
+                        );
+                      },
+                    }}
+                  >
+                    {processCitations(msg.content)}
                   </ReactMarkdown>
                   {isChatResponding &&
                     msg.id === lastAssistantId &&

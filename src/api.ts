@@ -26,14 +26,19 @@ export const documentsApi = {
 export const notesApi = {
   list: () => invoke<Note[]>("list_notes"),
   get: (id: number) => invoke<Note | null>("get_note", { id }),
-  create: (title: string, content: string, documentId: number | null) =>
-    invoke<number>("create_note", { title, content, documentId }),
+  create: (
+    title: string,
+    content: string,
+    documentId: number | null,
+    anchor: string | null,
+  ) => invoke<number>("create_note", { title, content, documentId, anchor }),
   update: (
     id: number,
     title: string,
     content: string,
     documentId: number | null,
-  ) => invoke<void>("edit_note", { id, title, content, documentId }),
+    anchor: string | null,
+  ) => invoke<void>("edit_note", { id, title, content, documentId, anchor }),
   remove: (id: number) => invoke<void>("delete_note", { id }),
 };
 

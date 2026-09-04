@@ -161,3 +161,22 @@ mark.search-highlight {
 .dark mark.search-highlight {
   background: #facc15;
 }
+
+mark.citation-highlight {
+  background: #bfdbfe;
+  color: #1e3a8a;
+  border-radius: 2px;
+  padding: 0;
+}
+.dark mark.citation-highlight {
+  background: #1e40af;
+  color: #dbeafe;
+}
+
+@keyframes citationFlash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+  50% { box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.5); }
+}
+mark.citation-flash {
+  animation: citationFlash 1.8s ease-out;
+}
