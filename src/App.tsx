@@ -7,7 +7,7 @@ import SettingsModal from "./components/SettingsModal";
 import { useAppStore } from "./store";
 
 export default function App() {
-  const { loadAll, selectedDocumentId, selectedNoteId, theme, toggleTheme } =
+  const { loadAll, selectedDocumentId, selectedNoteId, theme, toggleTheme, createNote, setCitation } =
     useAppStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -18,6 +18,28 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+
+      if (mod && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        createNote("Новая заметка", "");
+      } else if (mod && (e.key === "/" || e.key.toLowerCase() === "k")) {
+        e.preventDefault();
+        document.getElementById("search-input")?.focus();
+      } else if (e.key === "Escape") {
+        if (settingsOpen) {
+          setSettingsOpen(false);
+        } else {
+          setCitation(null);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [createNote, setCitation, settingsOpen]);
 
   const showDocument = selectedDocumentId !== null;
   const showNotes = selectedNoteId !== null;

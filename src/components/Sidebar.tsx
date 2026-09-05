@@ -150,6 +150,7 @@ export default function Sidebar() {
             />
           </svg>
           <input
+            id="search-input"
             value={searchQuery}
             onChange={(e) => search(e.target.value)}
             placeholder="Поиск по источникам..."

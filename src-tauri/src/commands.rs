@@ -429,6 +429,20 @@ pub fn save_settings(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn test_provider_connection(
+    provider: String,
+    api_key: String,
+    base_url: Option<String>,
+) -> Result<String, String> {
+    ai::test_provider_connection(&provider, &api_key, base_url).await
+}
+
+#[tauri::command]
+pub async fn list_ollama_models(base_url: Option<String>) -> Result<Vec<String>, String> {
+    ai::list_ollama_models(base_url).await
+}
+
 fn export_md_file(path: &str, content: &str) -> Result<(), String> {
     std::fs::write(path, content).map_err(|e| e.to_string())
 }

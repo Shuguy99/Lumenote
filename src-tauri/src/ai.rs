@@ -600,3 +600,102 @@ async fn ollama_stream(
     Ok(result)
 }
 
+pub async fn test_provider_connection(
+    provider: &str,
+    api_key: &str,
+    base_url: Option<String>,
+) -> Result<String, String> {
+    let provider_enum = match provider {
+        "anthropic" => Provider::Anthropic,
+        "ollama" => Provider::Ollama,
+        _ => Provider::OpenAI,
+    };
+
+    let (url, headers) = match provider_enum {
+        Provider::OpenAI => {
+            let base = base_url
+                .clone()
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+            (
+                format!("{}/models", base.trim_end_matches('/')),
+                default_headers(&Provider::OpenAI, api_key),
+            )
+        }
+        Provider::Anthropic => {
+            let base = base_url
+                .clone()
+                .unwrap_or_else(|| "https://api.anthropic.com/v1".to_string());
+            (
+                format!("{}/models", base.trim_end_matches('/')),
+                default_headers(&Provider::Anthropic, api_key),
+            )
+        }
+        Provider::Ollama => {
+            let base = base_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:11434".to_string());
+            (
+                format!("{}/api/tags", base.trim_end_matches('/')),
+                default_headers(&Provider::Ollama, ""),
+            )
+        }
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    let headers = build_headers(headers);
+    match client.get(&url).headers(headers).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                Ok(format!("Соединение установлено ({})", status))
+            } else {
+                let text = resp.text().await.unwrap_or_default();
+                Err(format!("HTTP {}: {}", status, truncate(&text, 300)))
+            }
+        }
+        Err(e) => Err(format!("Ошибка запроса: {}", e)),
+    }
+}
+
+pub async fn list_ollama_models(base_url: Option<String>) -> Result<Vec<String>, String> {
+    let base = base_url.unwrap_or_else(|| "http://localhost:11434".to_string());
+    let url = format!("{}/api/tags", base.trim_end_matches('/'));
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Запрос к Ollama не удался: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, truncate(&text, 300)));
+    }
+
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+
+    let parsed: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+
+    Ok(parsed["models"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m["name"].as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+

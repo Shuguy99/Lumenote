@@ -36,6 +36,8 @@ pub fn run() {
             commands::search_documents,
             commands::get_settings,
             commands::save_settings,
+            commands::test_provider_connection,
+            commands::list_ollama_models,
             commands::export_notes_md,
             commands::export_chat_md,
             commands::export_chat_pdf,

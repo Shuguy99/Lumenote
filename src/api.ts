@@ -147,4 +147,11 @@ export const settingsApi = {
   get: () => invoke<AiSettings>("get_settings"),
   save: (settings: SaveSettingsInput) =>
     invoke<void>("save_settings", { ...settings }),
+  test: (
+    provider: string,
+    apiKey: string,
+    baseUrl: string | null,
+  ) => invoke<string>("test_provider_connection", { provider, apiKey, baseUrl }),
+  ollamaModels: (baseUrl: string | null) =>
+    invoke<string[]>("list_ollama_models", { baseUrl }),
 };

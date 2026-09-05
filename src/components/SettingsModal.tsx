@@ -42,14 +42,55 @@ export default function SettingsModal({ open, onClose }: Props) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [models, setModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
       settingsApi.get().then(setSettings).catch((e) => setError(String(e)));
       setSaved(false);
       setError(null);
+      setTestResult(null);
+      setModels([]);
+      setModelsError(null);
     }
   }, [open]);
+
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await settingsApi.test(
+        settings.provider,
+        settings.api_key.trim(),
+        settings.base_url?.trim() || null,
+      );
+      setTestResult({ ok: true, text: res });
+    } catch (e) {
+      setTestResult({ ok: false, text: String(e) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleLoadModels = async () => {
+    setLoadingModels(true);
+    setModelsError(null);
+    setModels([]);
+    try {
+      const list = await settingsApi.ollamaModels(
+        settings.base_url?.trim() || null,
+      );
+      setModels(list);
+    } catch (e) {
+      setModelsError(String(e));
+    } finally {
+      setLoadingModels(false);
+    }
+  };
 
   if (!open) return null;
 
@@ -176,6 +217,44 @@ export default function SettingsModal({ open, onClose }: Props) {
             />
           </div>
 
+          {/* Ollama models loader */}
+          {settings.provider === "ollama" && (
+            <div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleLoadModels}
+                  disabled={loadingModels}
+                  className="text-xs text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors disabled:opacity-50"
+                >
+                  {loadingModels
+                    ? "Загрузка моделей..."
+                    : "Получить список моделей Ollama"}
+                </button>
+              </div>
+              {modelsError && (
+                <p className="text-xs text-red-600 mt-1.5">{modelsError}</p>
+              )}
+              {models.length > 0 && (
+                <select
+                  value={settings.model}
+                  onChange={(e) =>
+                    setSettings((s) => ({ ...s, model: e.target.value }))
+                  }
+                  className="mt-2 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value={settings.model} disabled>
+                    Выберите модель...
+                  </option>
+                  {models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
+
           {/* Base URL */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -190,6 +269,30 @@ export default function SettingsModal({ open, onClose }: Props) {
               placeholder="https://api.openai.com/v1 / http://localhost:11434"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
+          </div>
+
+          {/* Connection test */}
+          <div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleTest}
+                disabled={testing}
+                className="text-xs text-slate-700 border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                {testing ? "Проверка..." : "Проверить подключение"}
+              </button>
+              {testResult && (
+                <span
+                  className={`text-xs ${
+                    testResult.ok
+                      ? "text-emerald-600"
+                      : "text-red-600"
+                  }`}
+                >
+                  {testResult.text}
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Temperature and Max tokens */}

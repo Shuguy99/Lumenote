@@ -131,6 +131,7 @@ export default function ChatPanel() {
     selectSession,
     deleteSession,
     updateSessionSources,
+    renameSession,
     setError,
     error,
   } = useAppStore();
@@ -163,6 +164,14 @@ export default function ChatPanel() {
   const handleNewSession = async () => {
     await createSession("Новый чат", []);
     setShowSources(false);
+  };
+
+  const handleRename = () => {
+    if (activeSessionId === null || !activeSession) return;
+    const name = window.prompt("Название сессии", activeSession.title);
+    if (name && name.trim()) {
+      renameSession(activeSessionId, name.trim());
+    }
   };
 
   const [exporting, setExporting] = useState<boolean>(false);
@@ -215,8 +224,12 @@ export default function ChatPanel() {
             <select
               value={activeSessionId ?? ""}
               onChange={(e) => selectSession(Number(e.target.value))}
+              onDoubleClick={(e) => {
+                e.preventDefault();
+                handleRename();
+              }}
               className="bg-transparent outline-none text-sm font-medium cursor-pointer max-w-[14rem] truncate"
-              title="Переключить сессию чата"
+              title="Переключить сессию чата (двойной клик — переименовать)"
             >
               {sessions.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -279,6 +292,21 @@ export default function ChatPanel() {
                 strokeLinejoin="round"
                 strokeWidth={2}
                 d="M4 6h16M4 12h16M4 18h7"
+              />
+            </svg>
+          </button>
+          <button
+            onClick={handleRename}
+            disabled={activeSessionId === null}
+            className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Переименовать сессию"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
               />
             </svg>
           </button>
