@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useAppStore } from "../store";
+import { exportApi } from "../api";
 import { findTextOffset } from "../anchors";
 
 const CITATION_RE = /\[Doc:\s*([^\]]+)\]/g;
@@ -164,6 +165,25 @@ export default function ChatPanel() {
     setShowSources(false);
   };
 
+  const [exporting, setExporting] = useState<boolean>(false);
+  const handleExport = async (kind: "md" | "pdf") => {
+    if (activeSessionId === null || !activeSession) return;
+    setExporting(true);
+    try {
+      const savedPath =
+        kind === "md"
+          ? await exportApi.saveChatMd(activeSessionId, activeSession.title)
+          : await exportApi.saveChatPdf(activeSessionId, activeSession.title);
+      if (savedPath) {
+        setError(`Диалог экспортирован: ${savedPath}`);
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const toggleSource = (docId: number) => {
     if (isNoteSession) return;
     const next = activeDocIds.includes(docId)
@@ -216,6 +236,38 @@ export default function ChatPanel() {
           </p>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
+          <div className="relative group">
+            <button
+              disabled={exporting || activeSessionId === null || chat.length === 0}
+              className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Экспорт диалога (.md / .pdf)"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"
+                />
+              </svg>
+            </button>
+            <div className="hidden group-hover:block absolute right-0 mt-1 w-40 rounded-lg bg-white dark:bg-gray-800 shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-20">
+              <button
+                onClick={() => handleExport("md")}
+                disabled={exporting || activeSessionId === null || chat.length === 0}
+                className="w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-40"
+              >
+                В .md
+              </button>
+              <button
+                onClick={() => handleExport("pdf")}
+                disabled={exporting || activeSessionId === null || chat.length === 0}
+                className="w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-40"
+              >
+                В PDF
+              </button>
+            </div>
+          </div>
           <button
             onClick={() => setShowSources((v) => !v)}
             className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800"

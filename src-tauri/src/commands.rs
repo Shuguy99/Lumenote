@@ -379,3 +379,92 @@ pub fn save_settings(
     db::set_setting(&conn, "ai_max_tokens", &max_tokens.to_string()).map_err(|e| e.to_string())?;
     Ok(())
 }
+
+fn export_md_file(path: &str, content: &str) -> Result<(), String> {
+    std::fs::write(path, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn export_notes_md(note_ids: Vec<i64>, path: String) -> Result<(), String> {
+    let conn = open_conn()?;
+    let mut out = String::new();
+    for id in &note_ids {
+        if let Ok(Some(note)) = db::get_note(&conn, *id) {
+            let title = if note.title.trim().is_empty() {
+                "Без названия".to_string()
+            } else {
+                note.title.clone()
+            };
+            out.push_str(&format!("# {title}\n\n"));
+            out.push_str(&note.content.trim());
+            out.push_str("\n\n---\n\n");
+        }
+    }
+    drop(conn);
+    export_md_file(&path, &out)
+}
+
+#[tauri::command]
+pub fn export_chat_md(session_id: i64, path: String) -> Result<(), String> {
+    let conn = open_conn()?;
+    let title = db::get_chat_session(&conn, session_id)
+        .map_err(|e| e.to_string())?
+        .map(|s| s.title)
+        .ok_or_else(|| "Session not found".to_string())?;
+    let messages = db::get_chat_messages(&conn, session_id).map_err(|e| e.to_string())?;
+    drop(conn);
+
+    let mut out = format!("# Чат: {title}\n\n");
+    for msg in &messages {
+        let who = if msg.role == "user" {
+            "**Вы:**"
+        } else {
+            "**AI:**"
+        };
+        out.push_str(who);
+        out.push('\n');
+        out.push_str(&msg.content.trim());
+        out.push_str("\n\n---\n\n");
+    }
+    export_md_file(&path, &out)
+}
+
+#[tauri::command]
+pub fn export_chat_pdf(session_id: i64, path: String) -> Result<(), String> {
+    let conn = open_conn()?;
+    let title = db::get_chat_session(&conn, session_id)
+        .map_err(|e| e.to_string())?
+        .map(|s| s.title)
+        .ok_or_else(|| "Session not found".to_string())?;
+    let messages = db::get_chat_messages(&conn, session_id).map_err(|e| e.to_string())?;
+    drop(conn);
+
+    let mut out = format!("# Чат: {title}\n\n");
+    for msg in &messages {
+        let who = if msg.role == "user" { "Вопрос:" } else { "Ответ:" };
+        out.push_str(&format!("**{who}**\n\n"));
+        out.push_str(&msg.content.trim());
+        out.push_str("\n\n");
+    }
+    crate::export::export_pdf(&out, &path)
+}
+
+#[tauri::command]
+pub fn export_notes_pdf(note_ids: Vec<i64>, path: String) -> Result<(), String> {
+    let conn = open_conn()?;
+    let mut out = String::new();
+    for id in &note_ids {
+        if let Ok(Some(note)) = db::get_note(&conn, *id) {
+            let title = if note.title.trim().is_empty() {
+                "Без названия".to_string()
+            } else {
+                note.title.clone()
+            };
+            out.push_str(&format!("# {title}\n\n"));
+            out.push_str(&note.content.trim());
+            out.push_str("\n\n");
+        }
+    }
+    drop(conn);
+    crate::export::export_pdf(&out, &path)
+}

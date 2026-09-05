@@ -1,4 +1,5 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import type {
   AiSettings,
   ChatMessage,
@@ -13,6 +14,17 @@ export interface StreamEvent {
   type: "chunk" | "done" | "error";
   text?: string;
   message?: string;
+}
+
+async function pickSavePath(
+  suggestions: string[],
+  filters: { name: string; extensions: string[] }[],
+): Promise<string | null> {
+  return await save({ defaultPath: suggestions[0], filters });
+}
+
+function sanitizeFilename(name: string): string {
+  return name.replace(/[\\/:*?"<>|]/g, "_").trim().slice(0, 60) || "export";
 }
 
 export const documentsApi = {
@@ -76,6 +88,57 @@ export const sessionsApi = {
   update: (id: number, title: string, documentIds: number[]) =>
     invoke<void>("update_chat_session", { id, title, documentIds }),
   remove: (id: number) => invoke<void>("delete_chat_session", { id }),
+};
+
+export const exportApi = {
+  notesMd: (noteIds: number[], path: string) =>
+    invoke<void>("export_notes_md", { noteIds, path }),
+  chatMd: (sessionId: number, path: string) =>
+    invoke<void>("export_chat_md", { sessionId, path }),
+  chatPdf: (sessionId: number, path: string) =>
+    invoke<void>("export_chat_pdf", { sessionId, path }),
+  notesPdf: (noteIds: number[], path: string) =>
+    invoke<void>("export_notes_pdf", { noteIds, path }),
+
+  async saveNotesMd(noteIds: number[]): Promise<string | null> {
+    const path = await pickSavePath(
+      [`notes_${new Date().toISOString().slice(0, 10)}.md`],
+      [{ name: "Markdown", extensions: ["md"] }],
+    );
+    if (!path) return null;
+    await exportApi.notesMd(noteIds, path);
+    return path;
+  },
+
+  async saveChatMd(sessionId: number, sessionTitle: string): Promise<string | null> {
+    const path = await pickSavePath(
+      [`chat_${sanitizeFilename(sessionTitle)}.md`],
+      [{ name: "Markdown", extensions: ["md"] }],
+    );
+    if (!path) return null;
+    await exportApi.chatMd(sessionId, path);
+    return path;
+  },
+
+  async saveChatPdf(sessionId: number, sessionTitle: string): Promise<string | null> {
+    const path = await pickSavePath(
+      [`chat_${sanitizeFilename(sessionTitle)}.pdf`],
+      [{ name: "PDF", extensions: ["pdf"] }],
+    );
+    if (!path) return null;
+    await exportApi.chatPdf(sessionId, path);
+    return path;
+  },
+
+  async saveNotesPdf(noteIds: number[]): Promise<string | null> {
+    const path = await pickSavePath(
+      [`notes_${new Date().toISOString().slice(0, 10)}.pdf`],
+      [{ name: "PDF", extensions: ["pdf"] }],
+    );
+    if (!path) return null;
+    await exportApi.notesPdf(noteIds, path);
+    return path;
+  },
 };
 
 export const settingsApi = {

@@ -1,6 +1,7 @@
 mod ai;
 mod commands;
 mod db;
+mod export;
 mod parser;
 mod rag;
 
@@ -34,6 +35,10 @@ pub fn run() {
             commands::search_documents,
             commands::get_settings,
             commands::save_settings,
+            commands::export_notes_md,
+            commands::export_chat_md,
+            commands::export_chat_pdf,
+            commands::export_notes_pdf,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

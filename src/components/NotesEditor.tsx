@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useAppStore } from "../store";
+import { exportApi } from "../api";
 import { parseAnchor } from "../types";
 
 export default function NotesEditor() {
@@ -13,6 +14,7 @@ export default function NotesEditor() {
     deleteNote,
     selectDocument,
     createSession,
+    setError,
   } = useAppStore();
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
@@ -62,6 +64,31 @@ export default function NotesEditor() {
             }
           : null,
       );
+    }
+  };
+
+  const [exporting, setExporting] = useState<string | null>(null);
+  const allNoteIds = notes.map((n) => n.id);
+
+  const handleExport = async (kind: "md" | "pdf", scope: "one" | "all") => {
+    if (!note) return;
+    const key = `${scope}-${kind}`;
+    setExporting(key);
+    try {
+      const ids = scope === "one" ? [note.id] : allNoteIds;
+      const savedPath =
+        kind === "md"
+          ? await exportApi.saveNotesMd(ids)
+          : await exportApi.saveNotesPdf(ids);
+      if (savedPath) {
+        setError(
+          `${scope === "one" ? "Заметка" : `${ids.length} заметок`} экспортирована: ${savedPath}`,
+        );
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setExporting(null);
     }
   };
 
@@ -129,6 +156,50 @@ export default function NotesEditor() {
               />
             </svg>
           </button>
+          <div className="relative group">
+            <button
+              disabled={exporting !== null}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-medium transition-colors disabled:opacity-50"
+              title="Экспорт"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"
+                />
+              </svg>
+              {exporting ? "Экспорт…" : "Экспорт"}
+            </button>
+            <div className="hidden group-hover:block absolute right-0 mt-1 w-48 rounded-lg bg-white dark:bg-gray-800 shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-20">
+              <button
+                onClick={() => handleExport("md", "one")}
+                className="w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+              >
+                Эту заметку в .md
+              </button>
+              <button
+                onClick={() => handleExport("pdf", "one")}
+                className="w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+              >
+                Эту заметку в PDF
+              </button>
+              <div className="border-t border-gray-100 dark:border-gray-700 my-1" />
+              <button
+                onClick={() => handleExport("md", "all")}
+                className="w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+              >
+                Все заметки в .md
+              </button>
+              <button
+                onClick={() => handleExport("pdf", "all")}
+                className="w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+              >
+                Все заметки в PDF
+              </button>
+            </div>
+          </div>
           <button
             onClick={() => createSession(`Заметка: ${note.title}`, [], note.id)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-medium transition-colors"
