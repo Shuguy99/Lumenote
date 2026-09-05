@@ -29,9 +29,20 @@ pub struct Note {
 #[derive(Clone, Serialize)]
 pub struct ChatMessage {
     pub id: i64,
+    pub session_id: i64,
     pub role: String,
     pub content: String,
     pub created_at: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ChatSession {
+    pub id: i64,
+    pub title: String,
+    pub document_ids: String,
+    pub note_id: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 pub fn app_data_dir() -> PathBuf {
@@ -73,8 +84,18 @@ pub fn init_db() -> rusqlite::Result<Connection> {
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL DEFAULT 'Новый чат',
+            document_ids TEXT NOT NULL DEFAULT '[]',
+            note_id INTEGER REFERENCES notes(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE TABLE IF NOT EXISTS chat_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL DEFAULT 1,
             role TEXT NOT NULL,
             content TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -92,6 +113,30 @@ pub fn init_db() -> rusqlite::Result<Connection> {
     })?.filter_map(|r| r.ok()).any(|c| c == "anchor");
     if !has_anchor {
         conn.execute_batch("ALTER TABLE notes ADD COLUMN anchor TEXT;")?;
+    }
+
+    let session_cols = conn.prepare("PRAGMA table_info(chat_messages)")?.query_map([], |r| {
+        r.get::<_, String>(1)
+    })?.filter_map(|r| r.ok()).collect::<Vec<_>>();
+    if !session_cols.iter().any(|c| c == "session_id") {
+        conn.execute_batch("ALTER TABLE chat_messages ADD COLUMN session_id INTEGER NOT NULL DEFAULT 1;")?;
+    }
+
+    let session_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM chat_sessions",
+        [],
+        |r| r.get(0),
+    )?;
+    if session_count == 0 {
+        conn.execute(
+            "INSERT INTO chat_sessions (title, document_ids) VALUES (?1, ?2)",
+            params!["Основной чат", "[]"],
+        )?;
+        let default_session: i64 = conn.last_insert_rowid();
+        conn.execute(
+            "UPDATE chat_messages SET session_id = ?1 WHERE session_id < 1",
+            params![default_session],
+        )?;
     }
 
     Ok(conn)
@@ -338,24 +383,30 @@ pub fn delete_note(conn: &Connection, id: i64) -> rusqlite::Result<()> {
     Ok(())
 }
 
-pub fn insert_chat_message(conn: &Connection, role: &str, content: &str) -> rusqlite::Result<i64> {
+pub fn insert_chat_message(conn: &Connection, session_id: i64, role: &str, content: &str) -> rusqlite::Result<i64> {
     conn.execute(
-        "INSERT INTO chat_messages (role, content) VALUES (?1, ?2)",
-        params![role, content],
+        "INSERT INTO chat_messages (session_id, role, content) VALUES (?1, ?2, ?3)",
+        params![session_id, role, content],
+    )?;
+    conn.execute(
+        "UPDATE chat_sessions SET updated_at = datetime('now') WHERE id = ?1",
+        params![session_id],
     )?;
     Ok(conn.last_insert_rowid())
 }
 
-pub fn get_chat_messages(conn: &Connection) -> rusqlite::Result<Vec<ChatMessage>> {
+pub fn get_chat_messages(conn: &Connection, session_id: i64) -> rusqlite::Result<Vec<ChatMessage>> {
     let mut stmt = conn.prepare(
-        "SELECT id, role, content, created_at FROM chat_messages ORDER BY id",
+        "SELECT id, session_id, role, content, created_at FROM chat_messages
+         WHERE session_id = ?1 ORDER BY id",
     )?;
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map(params![session_id], |row| {
         Ok(ChatMessage {
             id: row.get(0)?,
-            role: row.get(1)?,
-            content: row.get(2)?,
-            created_at: row.get(3)?,
+            session_id: row.get(1)?,
+            role: row.get(2)?,
+            content: row.get(3)?,
+            created_at: row.get(4)?,
         })
     })?;
 
@@ -366,8 +417,85 @@ pub fn get_chat_messages(conn: &Connection) -> rusqlite::Result<Vec<ChatMessage>
     Ok(msgs)
 }
 
-pub fn clear_chat(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM chat_messages", [])?;
+pub fn clear_chat(conn: &Connection, session_id: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM chat_messages WHERE session_id = ?1",
+        params![session_id],
+    )?;
+    Ok(())
+}
+
+pub fn create_chat_session(
+    conn: &Connection,
+    title: &str,
+    document_ids: &str,
+    note_id: Option<i64>,
+) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO chat_sessions (title, document_ids, note_id) VALUES (?1, ?2, ?3)",
+        params![title, document_ids, note_id],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn get_chat_sessions(conn: &Connection) -> rusqlite::Result<Vec<ChatSession>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, document_ids, note_id, created_at, updated_at
+         FROM chat_sessions ORDER BY updated_at DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ChatSession {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            document_ids: row.get(2)?,
+            note_id: row.get(3)?,
+            created_at: row.get(4)?,
+            updated_at: row.get(5)?,
+        })
+    })?;
+
+    let mut sessions = Vec::new();
+    for r in rows {
+        sessions.push(r?);
+    }
+    Ok(sessions)
+}
+
+pub fn get_chat_session(conn: &Connection, id: i64) -> rusqlite::Result<Option<ChatSession>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, document_ids, note_id, created_at, updated_at
+         FROM chat_sessions WHERE id = ?1",
+    )?;
+    let mut rows = stmt.query_map(params![id], |row| {
+        Ok(ChatSession {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            document_ids: row.get(2)?,
+            note_id: row.get(3)?,
+            created_at: row.get(4)?,
+            updated_at: row.get(5)?,
+        })
+    })?;
+    rows.next().transpose()
+}
+
+pub fn update_chat_session(
+    conn: &Connection,
+    id: i64,
+    title: &str,
+    document_ids: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE chat_sessions SET title = ?1, document_ids = ?2, updated_at = datetime('now')
+         WHERE id = ?3",
+        params![title, document_ids, id],
+    )?;
+    Ok(())
+}
+
+pub fn delete_chat_session(conn: &Connection, id: i64) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM chat_messages WHERE session_id = ?1", params![id])?;
+    conn.execute("DELETE FROM chat_sessions WHERE id = ?1", params![id])?;
     Ok(())
 }
 

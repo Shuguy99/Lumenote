@@ -79,28 +79,76 @@ function CitationLink({
   );
 }
 
+function suggestedQuestions(
+  documents: { id: number; title: string }[],
+  noteTitle: string | null,
+): string[] {
+  if (noteTitle) {
+    return [
+      `Кратко резюмируй заметку «${noteTitle}»`,
+      `Выдели ключевые тезисы из заметки «${noteTitle}»`,
+      `О чем стоит спросить на основе «${noteTitle}»?`,
+    ];
+  }
+  if (documents.length === 0) {
+    return ["Привет! Чем могу помочь?"];
+  }
+  const first = documents[0].title;
+  const qs: string[] = [
+    "Сделай сводку по выбранным документам",
+    "Выдели ключевые тезисы и главные выводы",
+  ];
+  if (documents.length === 1) {
+    qs.push(`Что такое «${first}»? Основные идеи`);
+    qs.push(`О чем говорит «${first}»? Разверни`);
+  } else {
+    qs.push(`Сравни «${first}» и остальные выбранные документы`);
+  }
+  qs.push("Распиши подробный план по этой теме");
+  return qs;
+}
+
+function parseDocIds(raw: string): number[] {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((x): x is number => typeof x === "number") : [];
+  } catch {
+    return [];
+  }
+}
+
 export default function ChatPanel() {
   const {
     chat,
     isChatResponding,
     streamedResponse,
     sendChatMessage,
-    clearChat,
     documents,
-    selectedDocumentId,
+    sessions,
+    activeSessionId,
+    createSession,
+    selectSession,
+    deleteSession,
+    updateSessionSources,
     setError,
     error,
   } = useAppStore();
   const [input, setInput] = useState("");
+  const [showSources, setShowSources] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
+  const activeDocIds = activeSession ? parseDocIds(activeSession.document_ids) : [];
+  const isNoteSession = !!activeSession?.note_id;
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chat, isChatResponding]);
+  }, [chat, isChatResponding, activeSessionId]);
 
-  const handleSend = () => {
-    if (!input.trim()) return;
-    sendChatMessage(input);
+  const handleSend = (text?: string) => {
+    const content = (text ?? input).trim();
+    if (!content) return;
+    sendChatMessage(content);
     setInput("");
   };
 
@@ -111,45 +159,160 @@ export default function ChatPanel() {
     }
   };
 
-  const activeDoc = documents.find((d) => d.id === selectedDocumentId);
+  const handleNewSession = async () => {
+    await createSession("Новый чат", []);
+    setShowSources(false);
+  };
+
+  const toggleSource = (docId: number) => {
+    if (isNoteSession) return;
+    const next = activeDocIds.includes(docId)
+      ? activeDocIds.filter((d) => d !== docId)
+      : [...activeDocIds, docId];
+    updateSessionSources(next);
+  };
+
   const lastAssistantId = [...chat]
     .reverse()
     .find((m) => m.role === "assistant")?.id;
 
+  const suggestions = suggestedQuestions(
+    activeDocIds
+      .map((id) => documents.find((d) => d.id === id))
+      .filter((d): d is NonNullable<typeof d> => Boolean(d)),
+    isNoteSession ? "этой заметки" : null,
+  );
+
   return (
-    <div className="w-96 min-w-96 border-l border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 flex flex-col h-full">
+    <div className="w-[26rem] min-w-[26rem] border-l border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 flex flex-col h-full">
       {/* Header */}
-      <div className="border-b border-gray-200 dark:border-gray-800 px-4 py-3 flex items-center justify-between">
-        <div>
+      <div className="border-b border-gray-200 dark:border-gray-800 px-4 py-2 flex items-center justify-between gap-2">
+        <div className="min-w-0">
           <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-2">
-            <span className="w-5 h-5 rounded bg-emerald-500 flex items-center justify-center text-white text-[10px] font-bold">
+            <span className="w-5 h-5 rounded bg-emerald-500 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
               AI
             </span>
-            Чат
+            <select
+              value={activeSessionId ?? ""}
+              onChange={(e) => selectSession(Number(e.target.value))}
+              className="bg-transparent outline-none text-sm font-medium cursor-pointer max-w-[14rem] truncate"
+              title="Переключить сессию чата"
+            >
+              {sessions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.title}
+                </option>
+              ))}
+            </select>
           </h2>
-          <p className="text-xs text-gray-400 mt-0.5">
-            {activeDoc
-              ? `Вопросы по: ${activeDoc.title}`
-              : documents.length > 0
-                ? "Вопросы по всем документам"
-                : "Загрузите документы для оценки"}
+          <p className="text-xs text-gray-400 mt-0.5 truncate">
+            {isNoteSession
+              ? "Обсуждение заметки"
+              : activeDocIds.length > 0
+                ? `Источники: ${activeDocIds.length}`
+                : documents.length > 0
+                  ? "Выберите источники ниже"
+                  : "Загрузите документы для оценки"}
           </p>
         </div>
-        <button
-          onClick={clearChat}
-          className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800"
-          title="Очистить чат"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 0V4a1 1 0 011-1h2a1 1 0 011 1v3m-8 0h16"
-            />
-          </svg>
-        </button>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button
+            onClick={() => setShowSources((v) => !v)}
+            className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800"
+            title="Выбор источников"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 6h16M4 12h16M4 18h7"
+              />
+            </svg>
+          </button>
+          <button
+            onClick={handleNewSession}
+            className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800"
+            title="Новая сессия чата"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 5v14m7-7H5"
+              />
+            </svg>
+          </button>
+          {activeSessionId !== null && (
+            <button
+              onClick={() => {
+                if (confirm(`Удалить сессию «${activeSession?.title ?? ""}» и всю её историю?`)) {
+                  deleteSession(activeSessionId);
+                }
+              }}
+              className="text-gray-400 dark:text-gray-500 hover:text-red-500 p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-950/30"
+              title="Удалить сессию"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 0V4a1 1 0 011-1h2a1 1 0 011 1v3m-8 0h16"
+                />
+              </svg>
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Sources panel */}
+      {showSources && !isNoteSession && (
+        <div className="border-b border-gray-200 dark:border-gray-800 px-4 py-3 bg-gray-50 dark:bg-gray-800/60 max-h-48 overflow-y-auto">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-medium text-gray-600 dark:text-gray-300">
+              Источники для этой сессии
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => updateSessionSources(documents.map((d) => d.id))}
+                className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                Все
+              </button>
+              <button
+                onClick={() => updateSessionSources([])}
+                className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                Очистить
+              </button>
+            </div>
+          </div>
+          {documents.length === 0 ? (
+            <p className="text-xs text-gray-400">Нет загруженных документов</p>
+          ) : (
+            <ul className="space-y-1">
+              {documents.map((doc) => {
+                const checked = activeDocIds.includes(doc.id);
+                return (
+                  <li key={doc.id}>
+                    <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-200 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700/50 rounded px-1 py-0.5">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleSource(doc.id)}
+                        className="rounded accent-blue-600"
+                      />
+                      <span className="truncate">{doc.title}</span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Error banner */}
       {error && (
@@ -178,8 +341,22 @@ export default function ChatPanel() {
             </svg>
             <p>Задайте вопрос о ваших документах</p>
             <p className="text-xs mt-1">
-              AI ответит на основе загруженных источников
+              AI ответит на основе выбранных источников
             </p>
+          </div>
+        )}
+
+        {chat.length === 0 && (
+          <div className="flex flex-wrap gap-1.5 justify-center px-2">
+            {suggestions.map((q) => (
+              <button
+                key={q}
+                onClick={() => handleSend(q)}
+                className="px-3 py-1.5 rounded-full border border-gray-200 dark:border-gray-700 text-xs text-gray-600 dark:text-gray-300 hover:border-blue-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+              >
+                {q}
+              </button>
+            ))}
           </div>
         )}
 
@@ -258,7 +435,7 @@ export default function ChatPanel() {
             className="flex-1 bg-transparent text-sm text-gray-800 dark:text-gray-100 outline-none resize-none min-h-5 max-h-32 placeholder:text-gray-400 dark:placeholder:text-gray-500"
           />
           <button
-            onClick={handleSend}
+            onClick={() => handleSend()}
             disabled={!input.trim() || isChatResponding}
             className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:bg-blue-700 transition-colors flex-shrink-0"
           >
@@ -268,7 +445,7 @@ export default function ChatPanel() {
           </button>
         </div>
         <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1.5">
-          Enter — отправить, Shift+Enter — новая строка
+          Enter — отправить, Shift+Enter — новая строка · {isChatResponding ? "AI отвечает…" : "Источники: " + (activeDocIds.length || "нет")}
         </p>
       </div>
     </div>

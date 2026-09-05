@@ -154,15 +154,55 @@ pub fn delete_note(id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn get_chat_history() -> Result<Vec<ChatMessage>, String> {
+pub fn get_chat_history(session_id: i64) -> Result<Vec<ChatMessage>, String> {
     let conn = open_conn()?;
-    db::get_chat_messages(&conn).map_err(|e| e.to_string())
+    db::get_chat_messages(&conn, session_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn clear_chat_history() -> Result<(), String> {
+pub fn clear_chat_history(session_id: i64) -> Result<(), String> {
     let conn = open_conn()?;
-    db::clear_chat(&conn).map_err(|e| e.to_string())
+    db::clear_chat(&conn, session_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_chat_sessions() -> Result<Vec<db::ChatSession>, String> {
+    let conn = open_conn()?;
+    db::get_chat_sessions(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_chat_session(id: i64) -> Result<Option<db::ChatSession>, String> {
+    let conn = open_conn()?;
+    db::get_chat_session(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn create_chat_session(
+    title: String,
+    document_ids: Vec<i64>,
+    note_id: Option<i64>,
+) -> Result<i64, String> {
+    let conn = open_conn()?;
+    let ids_json = serde_json::to_string(&document_ids).map_err(|e| e.to_string())?;
+    db::create_chat_session(&conn, &title, &ids_json, note_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_chat_session(
+    id: i64,
+    title: String,
+    document_ids: Vec<i64>,
+) -> Result<(), String> {
+    let conn = open_conn()?;
+    let ids_json = serde_json::to_string(&document_ids).map_err(|e| e.to_string())?;
+    db::update_chat_session(&conn, id, &title, &ids_json).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_chat_session(id: i64) -> Result<(), String> {
+    let conn = open_conn()?;
+    db::delete_chat_session(&conn, id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -171,23 +211,41 @@ pub fn search_documents(query: String) -> Result<Vec<db::SearchResult>, String> 
     db::search_documents(&conn, &query, 20).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn send_chat_message(
-    message: String,
-    document_ids: Vec<i64>,
-) -> Result<String, String> {
-    let conn = open_conn()?;
+fn session_documents(conn: &rusqlite::Connection, session: &db::ChatSession) -> Vec<(String, String)> {
+    let mut docs: Vec<(String, String)> = Vec::new();
 
-    db::insert_chat_message(&conn, "user", &message).map_err(|e| e.to_string())?;
-
-    let mut docs = Vec::new();
-    for id in &document_ids {
-        if let Ok(Some(doc)) = db::get_document(&conn, *id) {
+    let ids: Vec<i64> = serde_json::from_str(&session.document_ids).unwrap_or_default();
+    for id in &ids {
+        if let Ok(Some(doc)) = db::get_document(conn, *id) {
             docs.push((doc.title, doc.content));
         }
     }
 
-    let history = db::get_chat_messages(&conn).map_err(|e| e.to_string())?;
+    if let Some(note_id) = session.note_id {
+        if let Ok(Some(note)) = db::get_note(conn, note_id) {
+            docs.push((format!("Заметка: {}", note.title), note.content));
+        }
+    }
+
+    docs
+}
+
+#[tauri::command]
+pub async fn send_chat_message(
+    message: String,
+    session_id: i64,
+) -> Result<String, String> {
+    let conn = open_conn()?;
+
+    let session = db::get_chat_session(&conn, session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Session not found".to_string())?;
+
+    db::insert_chat_message(&conn, session_id, "user", &message).map_err(|e| e.to_string())?;
+
+    let docs = session_documents(&conn, &session);
+
+    let history = db::get_chat_messages(&conn, session_id).map_err(|e| e.to_string())?;
     drop(conn);
 
     let mut messages: Vec<(String, String)> = Vec::new();
@@ -208,7 +266,7 @@ pub async fn send_chat_message(
     let response = ai::chat_completion_with_context(&settings, &messages, &docs, &context).await?;
 
     let conn = open_conn()?;
-    db::insert_chat_message(&conn, "assistant", &response).map_err(|e| e.to_string())?;
+    db::insert_chat_message(&conn, session_id, "assistant", &response).map_err(|e| e.to_string())?;
 
     Ok(response)
 }
@@ -216,21 +274,20 @@ pub async fn send_chat_message(
 #[tauri::command]
 pub async fn stream_chat_message(
     message: String,
-    document_ids: Vec<i64>,
+    session_id: i64,
     on_event: tauri::ipc::Channel<serde_json::Value>,
 ) -> Result<(), String> {
     let conn = open_conn()?;
 
-    db::insert_chat_message(&conn, "user", &message).map_err(|e| e.to_string())?;
+    let session = db::get_chat_session(&conn, session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Session not found".to_string())?;
 
-    let mut docs = Vec::new();
-    for id in &document_ids {
-        if let Ok(Some(doc)) = db::get_document(&conn, *id) {
-            docs.push((doc.title, doc.content));
-        }
-    }
+    db::insert_chat_message(&conn, session_id, "user", &message).map_err(|e| e.to_string())?;
 
-    let history = db::get_chat_messages(&conn).map_err(|e| e.to_string())?;
+    let docs = session_documents(&conn, &session);
+
+    let history = db::get_chat_messages(&conn, session_id).map_err(|e| e.to_string())?;
     drop(conn);
 
     let mut messages: Vec<(String, String)> = Vec::new();
@@ -252,7 +309,8 @@ pub async fn stream_chat_message(
 
     if !result.is_empty() {
         let conn2 = open_conn()?;
-        db::insert_chat_message(&conn2, "assistant", &result).map_err(|e| e.to_string())?;
+        db::insert_chat_message(&conn2, session_id, "assistant", &result)
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(())

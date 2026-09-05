@@ -51,9 +51,19 @@ export function parseAnchor(json: string | null): NoteAnchor | null {
 
 export interface ChatMessage {
   id: number;
+  session_id: number;
   role: string;
   content: string;
   created_at: string;
+}
+
+export interface ChatSession {
+  id: number;
+  title: string;
+  document_ids: string;
+  note_id: number | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AiSettings {

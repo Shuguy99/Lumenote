@@ -12,6 +12,7 @@ export default function NotesEditor() {
     updateNote,
     deleteNote,
     selectDocument,
+    createSession,
   } = useAppStore();
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
@@ -127,6 +128,16 @@ export default function NotesEditor() {
                 d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
               />
             </svg>
+          </button>
+          <button
+            onClick={() => createSession(`Заметка: ${note.title}`, [], note.id)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-medium transition-colors"
+            title="Открыть чат об этой заметке"
+          >
+            <span className="w-4 h-4 rounded bg-white/20 flex items-center justify-center text-[9px] font-bold">
+              AI
+            </span>
+            Обсудить
           </button>
         </div>
       </div>

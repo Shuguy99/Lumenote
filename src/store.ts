@@ -1,13 +1,14 @@
 import { create } from "zustand";
 import type {
   ChatMessage,
+  ChatSession,
   CitationHighlight,
   Document,
   Note,
   NoteAnchor,
   SearchResult,
 } from "./types";
-import { chatApi, documentsApi, notesApi, type StreamEvent } from "./api";
+import { chatApi, documentsApi, notesApi, sessionsApi, type StreamEvent } from "./api";
 
 type Theme = "light" | "dark";
 
@@ -15,6 +16,8 @@ interface AppState {
   documents: Document[];
   notes: Note[];
   chat: ChatMessage[];
+  sessions: ChatSession[];
+  activeSessionId: number | null;
   selectedDocumentId: number | null;
   selectedNoteId: number | null;
   viewedDocumentId: number | null;
@@ -49,6 +52,11 @@ interface AppState {
   selectNote: (id: number | null) => void;
   setCitation: (citation: CitationHighlight | null) => void;
   setError: (error: string | null) => void;
+  createSession: (title: string, documentIds: number[], noteId?: number | null) => Promise<number | null>;
+  selectSession: (id: number) => Promise<void>;
+  deleteSession: (id: number) => Promise<void>;
+  updateSessionSources: (documentIds: number[]) => Promise<void>;
+  renameSession: (id: number, title: string) => Promise<void>;
   sendChatMessage: (message: string) => Promise<void>;
   clearChat: () => Promise<void>;
   search: (query: string) => Promise<void>;
@@ -70,6 +78,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   documents: [],
   notes: [],
   chat: [],
+  sessions: [],
+  activeSessionId: null,
   selectedDocumentId: null,
   selectedNoteId: null,
   viewedDocumentId: null,
@@ -86,12 +96,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadAll: async () => {
     set({ isLoading: true, error: null });
     try {
+      const sessions = await sessionsApi.list();
+      const activeSessionId = sessions[0]?.id ?? null;
       const [documents, notes, chat] = await Promise.all([
         documentsApi.load(),
         notesApi.list(),
-        chatApi.history(),
+        activeSessionId !== null
+          ? chatApi.history(activeSessionId)
+          : Promise.resolve([]),
       ]);
-      set({ documents, notes, chat, isLoading: false });
+      set({ documents, notes, chat, sessions, activeSessionId, isLoading: false });
     } catch (e) {
       set({ error: String(e), isLoading: false });
     }
@@ -197,27 +211,101 @@ export const useAppStore = create<AppState>((set, get) => ({
   setCitation: (citation) => set({ citation }),
   setError: (error) => set({ error }),
 
+  createSession: async (title, documentIds, noteId = null) => {
+    try {
+      const id = await sessionsApi.create(title, documentIds, noteId);
+      await get().selectSession(id);
+      return id;
+    } catch (e) {
+      set({ error: String(e) });
+      return null;
+    }
+  },
+
+  selectSession: async (id) => {
+    set({ activeSessionId: id, isChatResponding: false, streamedResponse: null, error: null });
+    try {
+      const [chat, sessions] = await Promise.all([
+        chatApi.history(id),
+        sessionsApi.list(),
+      ]);
+      set({ chat, sessions });
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
+  deleteSession: async (id) => {
+    try {
+      await sessionsApi.remove(id);
+      const sessions = await sessionsApi.list();
+      const activeSessionId = sessions[0]?.id ?? null;
+      const chat = activeSessionId !== null ? await chatApi.history(activeSessionId) : [];
+      set({ sessions, activeSessionId, chat });
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
+  updateSessionSources: async (documentIds) => {
+    const { activeSessionId, sessions } = get();
+    if (activeSessionId === null) return;
+    const session = sessions.find((s) => s.id === activeSessionId);
+    if (!session) return;
+    if (session.note_id !== null) return;
+    const title = session.title;
+    try {
+      await sessionsApi.update(activeSessionId, title, documentIds);
+      set({
+        sessions: get().sessions.map((s) =>
+          s.id === activeSessionId
+            ? { ...s, document_ids: JSON.stringify(documentIds) }
+            : s,
+        ),
+      });
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
+  renameSession: async (id, title) => {
+    const session = get().sessions.find((s) => s.id === id);
+    if (!session) return;
+    let documentIds: number[] = [];
+    try {
+      documentIds = JSON.parse(session.document_ids);
+    } catch {
+      documentIds = [];
+    }
+    try {
+      await sessionsApi.update(id, title, documentIds);
+      set({
+        sessions: get().sessions.map((s) => (s.id === id ? { ...s, title } : s)),
+      });
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
   sendChatMessage: async (message) => {
-    const { chat, selectedDocumentId, documents } = get();
-    if (!message.trim() || get().isChatResponding) return;
+    const { activeSessionId, chat } = get();
+    if (!message.trim() || get().isChatResponding || activeSessionId === null) return;
 
     set({ isChatResponding: true, error: null, streamedResponse: null });
     try {
       const userMsg: ChatMessage = {
         id: Date.now(),
+        session_id: activeSessionId,
         role: "user",
         content: message,
         created_at: new Date().toISOString(),
       };
       set({ chat: [...chat, userMsg] });
 
-      const activeDocIds = selectedDocumentId
-        ? [selectedDocumentId]
-        : documents.map((d) => d.id);
-
       const aiMsgId = Date.now() + 1;
       const aiMsg: ChatMessage = {
         id: aiMsgId,
+        session_id: activeSessionId,
         role: "assistant",
         content: "",
         created_at: new Date().toISOString(),
@@ -240,7 +328,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       };
 
-      await chatApi.stream(message, activeDocIds, onEvent);
+      await chatApi.stream(message, activeSessionId, onEvent);
 
       set({
         chat: get().chat.map((m) =>
@@ -256,8 +344,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   clearChat: async () => {
+    const { activeSessionId } = get();
+    if (activeSessionId === null) return;
     try {
-      await chatApi.clear();
+      await chatApi.clear(activeSessionId);
       set({ chat: [] });
     } catch (e) {
       set({ error: String(e) });
