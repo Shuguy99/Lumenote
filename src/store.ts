@@ -33,6 +33,7 @@ interface AppState {
 
   loadAll: () => Promise<void>;
   addDocument: (path: string) => Promise<void>;
+  addDocumentFromUrl: (url: string) => Promise<void>;
   deleteDocument: (id: number) => Promise<void>;
   createNote: (
     title: string,
@@ -121,6 +122,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       await get().search(get().searchQuery);
     } catch (e) {
       set({ error: String(e) });
+    }
+  },
+
+  addDocumentFromUrl: async (url) => {
+    try {
+      const doc = await documentsApi.addFromUrl(url);
+      set((s) => ({
+        documents: [doc, ...s.documents],
+        viewedDocumentId: doc.id,
+      }));
+      await get().search(get().searchQuery);
+    } catch (e) {
+      set({ error: String(e) });
+      throw e;
     }
   },
 

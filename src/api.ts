@@ -30,6 +30,8 @@ function sanitizeFilename(name: string): string {
 export const documentsApi = {
   load: () => invoke<Document[]>("load_documents"),
   add: (path: string) => invoke<Document>("add_document", { path }),
+  addFromUrl: (url: string) =>
+    invoke<Document>("add_document_from_url", { url: url.trim() }),
   get: (id: number) => invoke<Document | null>("get_document", { id }),
   remove: (id: number) => invoke<void>("delete_document", { id }),
   search: (query: string) =>

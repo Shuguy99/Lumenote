@@ -11,6 +11,7 @@ export default function Sidebar() {
     selectDocument,
     selectNote,
     addDocument,
+    addDocumentFromUrl,
     deleteDocument,
     deleteNote,
     createNote,
@@ -32,9 +33,11 @@ export default function Sidebar() {
       const selected = await open({
         multiple: true,
         filters: [
-          { name: "Documents", extensions: ["pdf", "txt", "md", "markdown", "json", "csv"] },
+          { name: "Documents", extensions: ["pdf", "txt", "md", "markdown", "json", "csv", "docx", "html", "htm"] },
           { name: "PDF", extensions: ["pdf"] },
           { name: "Text", extensions: ["txt", "md", "markdown"] },
+          { name: "Word", extensions: ["docx"] },
+          { name: "HTML", extensions: ["html", "htm"] },
         ],
       });
 
@@ -53,6 +56,29 @@ export default function Sidebar() {
     await createNote("Новая заметка", "");
   };
 
+  const [urlInput, setUrlInput] = useState("");
+  const [addingUrl, setAddingUrl] = useState(false);
+
+  const handleAddUrl = async () => {
+    const url = urlInput.trim();
+    if (!url) return;
+    setAddingUrl(true);
+    try {
+      await addDocumentFromUrl(url);
+      setUrlInput("");
+    } catch {
+      // error already shown via store.setError
+    } finally {
+      setAddingUrl(false);
+    }
+  };
+
+  const handleUrlKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      handleAddUrl();
+    }
+  };
+
   return (
     <aside className="w-72 min-w-72 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col h-full">
       {/* Header */}
@@ -63,6 +89,48 @@ export default function Sidebar() {
           </span>
           Lumenote
         </h1>
+      </div>
+
+      {/* Add by URL */}
+      <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800">
+        <div className="relative">
+          <svg
+            className="w-4 h-4 text-gray-400 absolute left-3 top-2.5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M13.828 10.172a4 4 0 010 5.656l-4 4a4 4 0 01-5.656-5.656l2.343-2.343M10.172 13.828a4 4 0 010-5.656l4-4a4 4 0 015.656 5.656l-2.343 2.343"
+            />
+          </svg>
+          <input
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            onKeyDown={handleUrlKeyDown}
+            placeholder="Вставить ссылку (URL)..."
+            className="w-full bg-gray-100 dark:bg-gray-800 rounded-lg pl-9 pr-8 py-2 text-sm text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 dark:placeholder:text-gray-500"
+          />
+          <button
+            onClick={handleAddUrl}
+            disabled={!urlInput.trim() || addingUrl}
+            className="absolute right-2 top-2 w-5 h-5 flex items-center justify-center text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-40"
+            title="Добавить по ссылке"
+          >
+            {addingUrl ? (
+              <svg className="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            ) : (
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5-5 5M11 7H5v10h6" />
+              </svg>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Search */}

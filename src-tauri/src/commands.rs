@@ -81,6 +81,55 @@ pub fn add_document(path: String) -> Result<Document, String> {
     Ok(doc)
 }
 
+#[tauri::command]
+pub async fn add_document_from_url(url: String) -> Result<Document, String> {
+    let parsed = reqwest::Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Only http/https URLs are supported".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (compatible; Lumenote/0.1; +https://github.com/Shuguy99/Lumenote)")
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client.get(parsed.clone()).send().await.map_err(|e| format!("Request failed: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("Request failed with status: {}", resp.status()));
+    }
+    let bytes = resp.bytes().await.map_err(|e| format!("Failed to read response: {}", e))?;
+
+    let content = parser::parse_html(&bytes)?;
+    let title = parser::html_title(&bytes);
+    let title = if title.is_empty() {
+        parsed.host_str().unwrap_or("webpage").to_string()
+    } else {
+        title
+    };
+
+    let conn = open_conn()?;
+    let id = db::insert_document(&conn, &title, &url, &content, "url", bytes.len() as i64)
+        .map_err(|e| e.to_string())?;
+    let doc = db::get_document(&conn, id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Document not found after insert".to_string())?;
+    drop(conn);
+
+    let settings = {
+        let conn = open_conn()?;
+        extract_settings(&conn)?
+    };
+    if !settings.api_key.is_empty() || settings.provider == "ollama" {
+        let doc = doc.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = generate_summary_internal(&settings, &doc).await;
+        });
+    }
+
+    Ok(doc)
+}
+
 async fn generate_summary_internal(settings: &AiSettings, doc: &Document) -> Result<(), String> {
     let text = &doc.content;
     let truncated: String = text.chars().take(12000).collect();

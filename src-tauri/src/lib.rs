@@ -16,6 +16,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::load_documents,
             commands::add_document,
+            commands::add_document_from_url,
             commands::get_document,
             commands::delete_document,
             commands::list_notes,
