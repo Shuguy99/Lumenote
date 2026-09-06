@@ -125,21 +125,23 @@ pub fn select_relevant(
     result
 }
 
-pub fn build_context(documents: &[(String, String)], query: &str, max_tokens: usize) -> String {
-    let mut chunked: Vec<(String, Vec<String>)> = Vec::new();
-    for (title, content) in documents {
-        let chunks = split_into_chunks(content);
-        chunked.push((title.clone(), chunks));
-    }
-
-    let selected = select_relevant(&chunked, query, max_tokens);
-
+pub fn render_context(chunked: &[(String, Vec<String>)], selected: &[(usize, String)]) -> String {
     let mut context = String::new();
     for (doc_idx, chunk) in selected {
-        let title = &chunked[doc_idx].0;
+        let title = &chunked[*doc_idx].0;
         context.push_str(&format!("\n--- Из документа «{}» ---\n{}\n", title, chunk));
     }
     context
+}
+
+pub fn build_context(documents: &[(String, String)], query: &str, max_tokens: usize) -> String {
+    let mut chunked: Vec<(String, Vec<String>)> = Vec::new();
+    for (title, content) in documents {
+        chunked.push((title.clone(), split_into_chunks(content)));
+    }
+
+    let selected = select_relevant(&chunked, query, max_tokens);
+    render_context(&chunked, &selected)
 }
 
 #[cfg(test)]

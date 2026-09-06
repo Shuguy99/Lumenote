@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import Sidebar from "./components/Sidebar";
 import DocumentViewer from "./components/DocumentViewer";
 import NotesEditor from "./components/NotesEditor";
@@ -7,13 +8,37 @@ import SettingsModal from "./components/SettingsModal";
 import { useAppStore } from "./store";
 
 export default function App() {
-  const { loadAll, selectedDocumentId, selectedNoteId, theme, toggleTheme, createNote, setCitation } =
+  const { loadAll, addDocument, selectedDocumentId, selectedNoteId, theme, toggleTheme, createNote, setCitation } =
     useAppStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
 
   useEffect(() => {
     loadAll();
   }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    getCurrentWebviewWindow()
+      .onDragDropEvent((event) => {
+        const { type } = event.payload;
+        if (type === "enter" || type === "over") {
+          setDragActive(true);
+        } else if (type === "leave") {
+          setDragActive(false);
+        } else if (type === "drop") {
+          setDragActive(false);
+          const paths = event.payload.paths ?? [];
+          for (const path of paths) {
+            addDocument(path);
+          }
+        }
+      })
+      .then((cleanup) => {
+        unlisten = cleanup;
+      });
+    return () => unlisten?.();
+  }, [addDocument]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -144,6 +169,19 @@ export default function App() {
       </div>
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
+      {dragActive && (
+        <div className="fixed inset-0 z-50 bg-blue-500/10 dark:bg-blue-900/20 border-4 border-dashed border-blue-400 dark:border-blue-600 flex items-center justify-center pointer-events-none">
+          <div className="text-center">
+            <h2 className="text-2xl font-medium text-blue-700 dark:text-blue-300 mb-1">
+              Отпустите файлы
+            </h2>
+            <p className="text-sm text-blue-600/80 dark:text-blue-400/80">
+              PDF, TXT, MD будут добавлены в библиотеку
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

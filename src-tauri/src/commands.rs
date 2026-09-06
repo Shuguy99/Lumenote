@@ -63,6 +63,10 @@ pub fn add_document(path: String) -> Result<Document, String> {
     let size = parser::get_file_size(&file_path)?;
 
     let conn = open_conn()?;
+    if let Some(existing) = db::find_document_by_content(&conn, &content).map_err(|e| e.to_string())?
+    {
+        return Ok(existing);
+    }
     let id = db::insert_document(&conn, &title, &path, &content, &file_type, size)
         .map_err(|e| e.to_string())?;
     let doc = db::get_document(&conn, id)
@@ -112,6 +116,10 @@ pub async fn add_document_from_url(url: String) -> Result<Document, String> {
     };
 
     let conn = open_conn()?;
+    if let Some(existing) = db::find_document_by_content(&conn, &content).map_err(|e| e.to_string())?
+    {
+        return Ok(existing);
+    }
     let id = db::insert_document(&conn, &title, &url, &content, "url", bytes.len() as i64)
         .map_err(|e| e.to_string())?;
     let doc = db::get_document(&conn, id)
@@ -282,6 +290,47 @@ fn session_documents(conn: &rusqlite::Connection, session: &db::ChatSession) -> 
     docs
 }
 
+fn get_or_build_chunks(
+    conn: &rusqlite::Connection,
+    doc_id: i64,
+    content: &str,
+) -> Result<Vec<String>, String> {
+    if let Some(json) = db::get_document_chunks(conn, doc_id).map_err(|e| e.to_string())? {
+        if let Ok(chunks) = serde_json::from_str::<Vec<String>>(&json) {
+            return Ok(chunks);
+        }
+    }
+    let chunks = rag::split_into_chunks(content);
+    if let Ok(json) = serde_json::to_string(&chunks) {
+        let _ = db::set_document_chunks(conn, doc_id, &json);
+    }
+    Ok(chunks)
+}
+
+fn build_context_cached(
+    conn: &rusqlite::Connection,
+    session: &db::ChatSession,
+    query: &str,
+    max_tokens: usize,
+) -> Result<String, String> {
+    let mut chunked: Vec<(String, Vec<String>)> = Vec::new();
+    let ids: Vec<i64> = serde_json::from_str(&session.document_ids).unwrap_or_default();
+    for id in &ids {
+        if let Ok(Some(doc)) = db::get_document(conn, *id) {
+            let chunks = get_or_build_chunks(conn, doc.id, &doc.content)?;
+            chunked.push((doc.title, chunks));
+        }
+    }
+    if let Some(note_id) = session.note_id {
+        if let Ok(Some(note)) = db::get_note(conn, note_id) {
+            let chunks = rag::split_into_chunks(&note.content);
+            chunked.push((format!("Заметка: {}", note.title), chunks));
+        }
+    }
+    let selected = rag::select_relevant(&chunked, query, max_tokens);
+    Ok(rag::render_context(&chunked, &selected))
+}
+
 #[tauri::command]
 pub async fn send_chat_message(
     message: String,
@@ -298,6 +347,7 @@ pub async fn send_chat_message(
     let docs = session_documents(&conn, &session);
 
     let history = db::get_chat_messages(&conn, session_id).map_err(|e| e.to_string())?;
+    let context = build_context_cached(&conn, &session, &message, 3000)?;
     drop(conn);
 
     let mut messages: Vec<(String, String)> = Vec::new();
@@ -317,7 +367,6 @@ pub async fn send_chat_message(
         return Err("AI API key is not configured. Open Settings to configure it.".to_string());
     }
 
-    let context = rag::build_context(&docs, &message, 3000);
     let response = ai::chat_completion_with_context(&settings, &messages, &docs, &context).await?;
 
     let conn = open_conn()?;
@@ -343,6 +392,7 @@ pub async fn stream_chat_message(
     let docs = session_documents(&conn, &session);
 
     let history = db::get_chat_messages(&conn, session_id).map_err(|e| e.to_string())?;
+    let context = build_context_cached(&conn, &session, &message, 3000)?;
     drop(conn);
 
     let mut messages: Vec<(String, String)> = Vec::new();
@@ -369,7 +419,6 @@ pub async fn stream_chat_message(
         );
     }
 
-    let context = rag::build_context(&docs, &message, 3000);
     let result = ai::stream_chat_completion(&settings, &messages, &docs, &context, on_event).await?;
 
     if !result.is_empty() {

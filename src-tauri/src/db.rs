@@ -1,4 +1,4 @@
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -134,6 +134,26 @@ pub fn init_db() -> rusqlite::Result<Connection> {
         )?;
     }
 
+    // v4: full-text search index over documents + RAG chunk cache.
+    if version < 4 {
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
+             USING fts5(title, content, tokenize='unicode61');
+
+             CREATE TABLE IF NOT EXISTS document_chunks (
+                 document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+                 chunks TEXT NOT NULL
+             );",
+        )?;
+        let indexed: i64 = conn.query_row("SELECT COUNT(*) FROM documents_fts", [], |r| r.get(0))?;
+        if indexed == 0 {
+            conn.execute_batch(
+                "INSERT INTO documents_fts(rowid, title, content)
+                 SELECT id, title, content FROM documents;",
+            )?;
+        }
+    }
+
     let session_count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM chat_sessions",
         [],
@@ -151,7 +171,7 @@ pub fn init_db() -> rusqlite::Result<Connection> {
         )?;
     }
 
-    conn.execute_batch("PRAGMA user_version = 3;")?;
+    conn.execute_batch("PRAGMA user_version = 4;")?;
 
     Ok(conn)
 }
@@ -183,7 +203,12 @@ pub fn insert_document(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![title, file_path, content, preview, file_type, size],
     )?;
-    Ok(conn.last_insert_rowid())
+    let id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO documents_fts(rowid, title, content) VALUES (?1, ?2, ?3)",
+        params![id, title, content],
+    )?;
+    Ok(id)
 }
 
 pub fn get_documents(conn: &Connection) -> rusqlite::Result<Vec<Document>> {
@@ -241,7 +266,54 @@ pub fn update_document_summary(conn: &Connection, id: i64, summary: &str) -> rus
     Ok(())
 }
 
+pub fn find_document_by_content(
+    conn: &Connection,
+    content: &str,
+) -> rusqlite::Result<Option<Document>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, file_path, content, content_preview, file_type, size, summary, created_at
+         FROM documents WHERE content = ?1 LIMIT 1",
+    )?;
+    let mut rows = stmt.query_map(params![content], |row| {
+        Ok(Document {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            file_path: row.get(2)?,
+            content: row.get(3)?,
+            content_preview: row.get(4)?,
+            file_type: row.get(5)?,
+            size: row.get(6)?,
+            summary: row.get(7)?,
+            created_at: row.get(8)?,
+        })
+    })?;
+    rows.next().transpose()
+}
+
+pub fn get_document_chunks(conn: &Connection, document_id: i64) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT chunks FROM document_chunks WHERE document_id = ?1",
+        params![document_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+}
+
+pub fn set_document_chunks(
+    conn: &Connection,
+    document_id: i64,
+    chunks: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO document_chunks (document_id, chunks) VALUES (?1, ?2)
+         ON CONFLICT(document_id) DO UPDATE SET chunks = ?2",
+        params![document_id, chunks],
+    )?;
+    Ok(())
+}
+
 pub fn delete_document(conn: &Connection, id: i64) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM documents_fts WHERE rowid = ?1", params![id])?;
     conn.execute("DELETE FROM documents WHERE id = ?1", params![id])?;
     Ok(())
 }
@@ -259,77 +331,42 @@ pub fn search_documents(
     query: &str,
     limit: usize,
 ) -> rusqlite::Result<Vec<SearchResult>> {
-    let q = query.trim().to_lowercase();
-    if q.is_empty() {
+    let fts_query = build_fts_query(query);
+    if fts_query.is_empty() {
         return Ok(Vec::new());
     }
-    let mut stmt = conn.prepare(
-        "SELECT id, title, content FROM documents ORDER BY created_at DESC",
-    )?;
-    let rows = stmt.query_map([], |row| {
+
+    let sql = "SELECT rowid, title, snippet(documents_fts, 1, '', '', '…', 18)
+               FROM documents_fts WHERE documents_fts MATCH ?1
+               ORDER BY rank LIMIT ?2";
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(params![fts_query, limit as i64], |row| {
         Ok((
             row.get::<_, i64>(0)?,
             row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(2)?,
         ))
     })?;
 
-    let mut results: Vec<SearchResult> = Vec::new();
+    let mut results = Vec::new();
     for r in rows {
-        let (id, title, content) = r?;
-        let content_lower = content.to_lowercase();
-        let mut search_from = 0usize;
-        let mut found_in_doc = 0usize;
-
-        while let Some(rel) = content_lower[search_from..].find(&q) {
-            let abs_pos = search_from + rel;
-            let start = abs_pos.saturating_sub(120);
-            let end = (abs_pos + q.len() + 120).min(content.len());
-
-            let safe_start = prev_char_boundary(&content, start);
-            let safe_end = next_char_boundary(&content, end);
-            let snippet: String = content[safe_start..safe_end]
-                .chars()
-                .take(400)
-                .collect::<String>()
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .take(3)
-                .collect::<Vec<_>>()
-                .join(" ");
-
-            results.push(SearchResult {
-                document_id: id,
-                title: title.clone(),
-                snippet,
-                match_index: found_in_doc as i64,
-            });
-
-            found_in_doc += 1;
-            search_from = abs_pos + 1;
-            if found_in_doc >= 5 || results.len() >= limit {
-                break;
-            }
-        }
-        if results.len() >= limit {
-            break;
-        }
+        let (id, title, snippet) = r?;
+        results.push(SearchResult {
+            document_id: id,
+            title,
+            snippet: snippet.unwrap_or_default(),
+            match_index: 0,
+        });
     }
     Ok(results)
 }
 
-fn prev_char_boundary(s: &str, mut idx: usize) -> usize {
-    while idx > 0 && !s.is_char_boundary(idx) {
-        idx -= 1;
-    }
-    idx
-}
-
-fn next_char_boundary(s: &str, mut idx: usize) -> usize {
-    while idx < s.len() && !s.is_char_boundary(idx) {
-        idx += 1;
-    }
-    idx
+fn build_fts_query(raw: &str) -> String {
+    raw.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|w| !w.is_empty())
+        .map(|w| format!("{}*", w))
+        .collect::<Vec<_>>()
+        .join(" AND ")
 }
 
 pub fn insert_note(
@@ -575,7 +612,7 @@ mod tests {
             let version: i64 = conn
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(version, 3);
+            assert_eq!(version, 4);
             assert!(column_exists(&conn, "notes", "anchor").unwrap());
             assert!(column_exists(&conn, "chat_messages", "session_id").unwrap());
             let sessions: i64 = conn
@@ -669,6 +706,11 @@ mod tests {
             assert!(column_exists(&conn, "notes", "anchor").unwrap());
             assert!(column_exists(&conn, "chat_messages", "session_id").unwrap());
 
+            // Full-text index built over legacy documents.
+            let results = search_documents(&conn, "body", 10).unwrap();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].document_id, 1);
+
             // One default session exists and the orphaned message was attached to it.
             let sessions: i64 = conn
                 .query_row("SELECT COUNT(*) FROM chat_sessions", [], |r| r.get(0))
@@ -682,6 +724,62 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(orphan, 1);
+        });
+    }
+
+    #[test]
+    fn fts_search_indexes_and_deletes_documents() {
+        with_temp_dir(|_| {
+            let conn = init_db().unwrap();
+            insert_document(
+                &conn,
+                "Отчёт",
+                "/tmp/1.txt",
+                "Квантовая физика и нейросети. Очень длинный вводный текст.",
+                "txt",
+                1,
+            )
+            .unwrap();
+            insert_document(
+                &conn,
+                "Инструкция",
+                "/tmp/2.txt",
+                "Как починить принтер шаг за шагом.",
+                "txt",
+                1,
+            )
+            .unwrap();
+
+            let results = search_documents(&conn, "квант", 10).unwrap();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].document_id, 1);
+            assert_eq!(results[0].title, "Отчёт");
+            assert!(!results[0].snippet.is_empty());
+
+            let multi = search_documents(&conn, "физика нейросети", 10).unwrap();
+            assert_eq!(multi.len(), 1);
+
+            delete_document(&conn, 1).unwrap();
+            let after_delete = search_documents(&conn, "квант", 10).unwrap();
+            assert!(after_delete.is_empty());
+        });
+    }
+
+    #[test]
+    fn document_chunks_cache_roundtrip_and_cascade() {
+        with_temp_dir(|_| {
+            let conn = init_db().unwrap();
+            let doc_id = insert_document(&conn, "Док", "/tmp/1.txt", "контент", "txt", 1).unwrap();
+            assert!(get_document_chunks(&conn, doc_id).unwrap().is_none());
+
+            set_document_chunks(&conn, doc_id, "[\"часть 1\",\"часть 2\"]").unwrap();
+            assert_eq!(
+                get_document_chunks(&conn, doc_id).unwrap().unwrap(),
+                "[\"часть 1\",\"часть 2\"]"
+            );
+
+            delete_document(&conn, doc_id).unwrap();
+            assert!(get_document_chunks(&conn, doc_id).unwrap().is_none());
         });
     }
 
