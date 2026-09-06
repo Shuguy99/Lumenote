@@ -20,6 +20,8 @@ pub fn run() {
             commands::load_documents,
             commands::add_document,
             commands::add_document_from_url,
+            commands::reload_document,
+            commands::import_folder,
             commands::get_document,
             commands::delete_document,
             commands::list_notes,

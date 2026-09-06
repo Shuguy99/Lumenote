@@ -266,6 +266,36 @@ pub fn update_document_summary(conn: &Connection, id: i64, summary: &str) -> rus
     Ok(())
 }
 
+pub fn update_document_content(
+    conn: &Connection,
+    id: i64,
+    content: &str,
+    content_preview: &str,
+    file_type: &str,
+    size: i64,
+) -> rusqlite::Result<()> {
+    let title: String = conn.query_row(
+        "SELECT title FROM documents WHERE id = ?1",
+        params![id],
+        |row| row.get(0),
+    )?;
+
+    conn.execute(
+        "UPDATE documents SET content = ?1, content_preview = ?2, file_type = ?3, size = ?4 WHERE id = ?5",
+        params![content, content_preview, file_type, size, id],
+    )?;
+    conn.execute("DELETE FROM documents_fts WHERE rowid = ?1", params![id])?;
+    conn.execute(
+        "INSERT INTO documents_fts(rowid, title, content) VALUES (?1, ?2, ?3)",
+        params![id, title, content],
+    )?;
+    conn.execute(
+        "DELETE FROM document_chunks WHERE document_id = ?1",
+        params![id],
+    )?;
+    Ok(())
+}
+
 pub fn find_document_by_content(
     conn: &Connection,
     content: &str,
@@ -780,6 +810,42 @@ mod tests {
 
             delete_document(&conn, doc_id).unwrap();
             assert!(get_document_chunks(&conn, doc_id).unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn update_document_content_refreshes_fts_and_clears_cache() {
+        with_temp_dir(|_| {
+            let conn = init_db().unwrap();
+            let id = insert_document(
+                &conn,
+                "Отчёт",
+                "/tmp/1.txt",
+                "Старый текст про кошек",
+                "txt",
+                1,
+            )
+            .unwrap();
+            set_document_chunks(&conn, id, "[\"старый\"]").unwrap();
+
+            update_document_content(
+                &conn,
+                id,
+                "Новый текст про собак и нейросети",
+                "Новый текст",
+                "txt",
+                2,
+            )
+            .unwrap();
+
+            let searchable = search_documents(&conn, "собак", 10).unwrap();
+            assert_eq!(searchable.len(), 1);
+            assert_eq!(searchable[0].document_id, id);
+
+            let old = search_documents(&conn, "кошек", 10).unwrap();
+            assert!(old.is_empty());
+
+            assert!(get_document_chunks(&conn, id).unwrap().is_none());
         });
     }
 

@@ -11,6 +11,7 @@ export default function Sidebar() {
     selectDocument,
     selectNote,
     addDocument,
+    importFolder,
     addDocumentFromUrl,
     deleteDocument,
     deleteNote,
@@ -46,6 +47,17 @@ export default function Sidebar() {
         for (const p of paths) {
           await addDocument(p);
         }
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const handleAddFolder = async () => {
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      if (selected) {
+        await importFolder(selected);
       }
     } catch (e) {
       setError(String(e));
@@ -219,15 +231,26 @@ export default function Sidebar() {
                 Источники ({documents.length})
               </span>
             </button>
-            <button
-              onClick={handleAddDocument}
-              className="w-6 h-6 rounded hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center justify-center text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-              title="Добавить документ"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-            </button>
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={handleAddFolder}
+                className="w-6 h-6 rounded hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center justify-center text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                title="Импортировать папку"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7a4 4 0 014-4h3.586a1 1 0 01.707.293L13 5h4a4 4 0 014 4v8a4 4 0 01-4 4H7a4 4 0 01-4-4V7z" />
+                </svg>
+              </button>
+              <button
+                onClick={handleAddDocument}
+                className="w-6 h-6 rounded hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center justify-center text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                title="Добавить документ"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+              </button>
+            </div>
           </div>
 
           {docExpanded && (

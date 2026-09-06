@@ -68,6 +68,7 @@ export default function DocumentViewer() {
     deleteDocument,
     createNote,
     selectNote,
+    reloadDocument,
     setCitation,
     searchQuery,
     searchResults,
@@ -199,6 +200,15 @@ export default function DocumentViewer() {
           >
             Создать заметку из документа
           </button>
+          {doc.file_type !== "url" && (
+            <button
+              onClick={() => reloadDocument(doc.id)}
+              className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm text-gray-700 dark:text-gray-300 rounded-md transition-colors"
+              title="Перечитать файл с диска"
+            >
+              Обновить
+            </button>
+          )}
           <button
             onClick={() => deleteDocument(doc.id)}
             className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm text-red-600 dark:text-red-400 rounded-md transition-colors"

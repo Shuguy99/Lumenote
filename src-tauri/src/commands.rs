@@ -74,18 +74,125 @@ pub fn add_document(path: String) -> Result<Document, String> {
         .ok_or_else(|| "Document not found after insert".to_string())?;
     drop(conn);
 
-    let settings = {
-        let conn = open_conn()?;
-        extract_settings(&conn)?
-    };
-    if !settings.api_key.is_empty() || settings.provider == "ollama" {
-        let doc = doc.clone();
-        tauri::async_runtime::spawn(async move {
-            let _ = generate_summary_internal(&settings, &doc).await;
-        });
-    }
+    spawn_summary_if_possible(&doc);
 
     Ok(doc)
+}
+
+const SUPPORTED_DOC_EXTENSIONS: &[&str] = &[
+    "pdf", "txt", "text", "md", "markdown", "json", "csv", "docx", "html", "htm",
+];
+
+#[tauri::command]
+pub fn reload_document(id: i64) -> Result<Document, String> {
+    let existing = {
+        let conn = open_conn()?;
+        db::get_document(&conn, id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Document not found".to_string())?
+    };
+
+    let file_path = std::path::PathBuf::from(&existing.file_path);
+    if !file_path.exists() {
+        return Err(format!("File not found: {}", existing.file_path));
+    }
+    let content = parser::parse_file(&file_path)?;
+    let preview: String = content.chars().take(300).collect();
+    let file_type = parser::get_file_type(&file_path);
+    let size = parser::get_file_size(&file_path)?;
+
+    let doc = {
+        let conn = open_conn()?;
+        db::update_document_content(&conn, id, &content, &preview, &file_type, size)
+            .map_err(|e| e.to_string())?;
+        db::get_document(&conn, id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Document not found after update".to_string())?
+    };
+
+    spawn_summary_if_possible(&doc);
+
+    Ok(doc)
+}
+
+#[tauri::command]
+pub fn import_folder(path: String) -> Result<Vec<Document>, String> {
+    let root = std::path::PathBuf::from(&path);
+    if !root.is_dir() {
+        return Err("Указанный путь — не папка".to_string());
+    }
+
+    let mut added: Vec<Document> = Vec::new();
+    for entry in walkdir::WalkDir::new(&root).into_iter().filter_map(|e| e.ok()) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let file_path = entry.path();
+        let ext = file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if !SUPPORTED_DOC_EXTENSIONS.contains(&ext.as_str()) {
+            continue;
+        }
+
+        let Ok(content) = parser::parse_file(file_path) else { continue; };
+        let title = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("untitled")
+            .to_string();
+        let file_type = parser::get_file_type(file_path);
+        let Ok(size) = parser::get_file_size(file_path) else { continue; };
+
+        let conn = open_conn()?;
+        if let Ok(Some(_)) = db::find_document_by_content(&conn, &content) {
+            drop(conn);
+            continue;
+        }
+        let id = match db::insert_document(
+            &conn,
+            &title,
+            &file_path.to_string_lossy(),
+            &content,
+            &file_type,
+            size,
+        ) {
+            Ok(id) => id,
+            Err(_) => {
+                drop(conn);
+                continue;
+            }
+        };
+        let doc = db::get_document(&conn, id).ok().flatten();
+        drop(conn);
+
+        if let Some(doc) = doc {
+            spawn_summary_if_possible(&doc);
+            added.push(doc);
+        }
+    }
+
+    Ok(added)
+}
+
+fn spawn_summary_if_possible(doc: &Document) {
+    let settings = {
+        let Ok(conn) = open_conn() else { return };
+        let Ok(s) = extract_settings(&conn) else { return };
+        s
+    };
+    if settings.api_key.is_empty()
+        && settings.provider != "ollama"
+        && settings.provider != "local"
+    {
+        return;
+    }
+    let doc = doc.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = generate_summary_internal(&settings, &doc).await;
+    });
 }
 
 #[tauri::command]
@@ -127,16 +234,7 @@ pub async fn add_document_from_url(url: String) -> Result<Document, String> {
         .ok_or_else(|| "Document not found after insert".to_string())?;
     drop(conn);
 
-    let settings = {
-        let conn = open_conn()?;
-        extract_settings(&conn)?
-    };
-    if !settings.api_key.is_empty() || settings.provider == "ollama" {
-        let doc = doc.clone();
-        tauri::async_runtime::spawn(async move {
-            let _ = generate_summary_internal(&settings, &doc).await;
-        });
-    }
+    spawn_summary_if_possible(&doc);
 
     Ok(doc)
 }

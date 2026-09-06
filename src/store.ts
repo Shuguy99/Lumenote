@@ -9,6 +9,7 @@ import type {
   SearchResult,
 } from "./types";
 import { chatApi, documentsApi, notesApi, sessionsApi, type StreamEvent } from "./api";
+import { findTextOffset } from "./anchors";
 
 type Theme = "light" | "dark";
 
@@ -34,6 +35,8 @@ interface AppState {
   loadAll: () => Promise<void>;
   addDocument: (path: string) => Promise<void>;
   addDocumentFromUrl: (url: string) => Promise<void>;
+  reloadDocument: (id: number) => Promise<void>;
+  importFolder: (path: string) => Promise<void>;
   deleteDocument: (id: number) => Promise<void>;
   createNote: (
     title: string,
@@ -136,6 +139,36 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (e) {
       set({ error: String(e) });
       throw e;
+    }
+  },
+
+  reloadDocument: async (id) => {
+    try {
+      const doc = await documentsApi.reload(id);
+      set((s) => ({
+        documents: s.documents.map((d) => (d.id === id ? doc : d)),
+        citation: s.citation?.documentId === id ? null : s.citation,
+      }));
+      await get().search(get().searchQuery);
+      set({ error: `Документ обновлён: ${doc.title}` });
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
+  importFolder: async (path) => {
+    try {
+      const docs = await documentsApi.importFolder(path);
+      set((s) => ({
+        documents: [
+          ...docs.filter((d) => !s.documents.some((x) => x.id === d.id)),
+          ...s.documents,
+        ],
+      }));
+      await get().search(get().searchQuery);
+      set({ error: docs.length > 0 ? `Импортировано документов: ${docs.length}` : "Новых документов в папке не найдено" });
+    } catch (e) {
+      set({ error: String(e) });
     }
   },
 
@@ -385,10 +418,26 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   openSearchResult: (documentId) => {
+    const { documents, searchQuery } = get();
+    const doc = documents.find((d) => d.id === documentId);
+    let citation: CitationHighlight | null = null;
+    if (doc) {
+      const term =
+        searchQuery
+          .trim()
+          .split(/\s+/)
+          .filter(Boolean)[0] ?? "";
+      const q = term.length > 0 ? term : searchQuery.trim();
+      const offset = findTextOffset(doc.content, q);
+      if (offset >= 0) {
+        citation = { documentId, offset, length: q.length };
+      }
+    }
     set({
       selectedDocumentId: documentId,
       selectedNoteId: null,
       viewedDocumentId: documentId,
+      citation,
     });
   },
 
