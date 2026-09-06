@@ -46,6 +46,12 @@ pub struct ChatSession {
 }
 
 pub fn app_data_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("LUMENOTE_DATA_DIR") {
+        let dir = dir.trim();
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
     let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
     base.join("ai-notebook")
 }
@@ -61,65 +67,71 @@ pub fn init_db() -> rusqlite::Result<Connection> {
     conn.execute_batch(
         "
         PRAGMA journal_mode = WAL;
-        
-        CREATE TABLE IF NOT EXISTS documents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            content TEXT NOT NULL,
-            content_preview TEXT NOT NULL,
-            file_type TEXT NOT NULL,
-            size INTEGER NOT NULL,
-            summary TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS notes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            content TEXT NOT NULL DEFAULT '',
-            document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
-            anchor TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS chat_sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL DEFAULT 'Новый чат',
-            document_ids TEXT NOT NULL DEFAULT '[]',
-            note_id INTEGER REFERENCES notes(id) ON DELETE SET NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS chat_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id INTEGER NOT NULL DEFAULT 1,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
+        PRAGMA foreign_keys = ON;
         ",
     )?;
 
-    let has_anchor = conn.prepare("PRAGMA table_info(notes)")?.query_map([], |r| {
-        r.get::<_, String>(1)
-    })?.filter_map(|r| r.ok()).any(|c| c == "anchor");
-    if !has_anchor {
-        conn.execute_batch("ALTER TABLE notes ADD COLUMN anchor TEXT;")?;
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+
+    if version < 1 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                content TEXT NOT NULL,
+                content_preview TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                summary TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+                anchor TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL DEFAULT 'Новый чат',
+                document_ids TEXT NOT NULL DEFAULT '[]',
+                note_id INTEGER REFERENCES notes(id) ON DELETE SET NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL DEFAULT 1,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            ",
+        )?;
     }
 
-    let session_cols = conn.prepare("PRAGMA table_info(chat_messages)")?.query_map([], |r| {
-        r.get::<_, String>(1)
-    })?.filter_map(|r| r.ok()).collect::<Vec<_>>();
-    if !session_cols.iter().any(|c| c == "session_id") {
-        conn.execute_batch("ALTER TABLE chat_messages ADD COLUMN session_id INTEGER NOT NULL DEFAULT 1;")?;
+    // Defensive backfill: schemas created by earlier ad-hoc migrations may be
+    // missing these columns even though user_version was never bumped.
+    if !column_exists(&conn, "notes", "anchor")? {
+        conn.execute_batch("ALTER TABLE notes ADD COLUMN anchor TEXT;")?;
+    }
+    if !column_exists(&conn, "chat_messages", "session_id")? {
+        conn.execute_batch(
+            "ALTER TABLE chat_messages ADD COLUMN session_id INTEGER NOT NULL DEFAULT 1;",
+        )?;
     }
 
     let session_count: i64 = conn.query_row(
@@ -139,7 +151,22 @@ pub fn init_db() -> rusqlite::Result<Connection> {
         )?;
     }
 
+    conn.execute_batch("PRAGMA user_version = 3;")?;
+
     Ok(conn)
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+    let mut rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    let mut found = false;
+    while let Some(name) = rows.next() {
+        if name? == column {
+            found = true;
+            break;
+        }
+    }
+    Ok(found)
 }
 
 pub fn insert_document(
@@ -512,4 +539,175 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Resul
         params![key, value],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // init_db writes to LUMENOTE_DATA_DIR, which is process-global.
+    // Serialize these tests to avoid races on the env var.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_temp_dir(f: impl FnOnce(&std::path::Path)) {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "lumenote_db_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("LUMENOTE_DATA_DIR", &dir);
+        f(&dir);
+        std::env::remove_var("LUMENOTE_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fresh_init_creates_schema_and_default_session() {
+        with_temp_dir(|_| {
+            let conn = init_db().unwrap();
+            let version: i64 = conn
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(version, 3);
+            assert!(column_exists(&conn, "notes", "anchor").unwrap());
+            assert!(column_exists(&conn, "chat_messages", "session_id").unwrap());
+            let sessions: i64 = conn
+                .query_row("SELECT COUNT(*) FROM chat_sessions", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(sessions, 1);
+        });
+    }
+
+    #[test]
+    fn legacy_schema_migrates_without_data_loss() {
+        with_temp_dir(|_| {
+            let legacy_path = db_path();
+            {
+                let conn = Connection::open(&legacy_path).unwrap();
+                conn.execute_batch(
+                    "
+                    CREATE TABLE documents (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        title TEXT NOT NULL,
+                        file_path TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        content_preview TEXT NOT NULL,
+                        file_type TEXT NOT NULL,
+                        size INTEGER NOT NULL,
+                        summary TEXT,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    );
+                    CREATE TABLE notes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        title TEXT NOT NULL,
+                        content TEXT NOT NULL DEFAULT '',
+                        document_id INTEGER,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    );
+                    CREATE TABLE chat_sessions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        title TEXT NOT NULL DEFAULT 'Новый чат',
+                        document_ids TEXT NOT NULL DEFAULT '[]',
+                        note_id INTEGER,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    );
+                    CREATE TABLE chat_messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        role TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    );
+                    CREATE TABLE settings (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    );
+                    ",
+                )
+                .unwrap();
+                conn.execute(
+                    "INSERT INTO documents (title, file_path, content, content_preview, file_type, size)
+                     VALUES ('legacy doc', '/tmp/d', 'body', 'body', 'txt', 4)",
+                    params![],
+                )
+                .unwrap();
+                let doc_id = conn.last_insert_rowid();
+                conn.execute(
+                    "INSERT INTO notes (title, content, document_id) VALUES ('keep', 'data', ?1)",
+                    params![doc_id],
+                )
+                .unwrap();
+                conn.execute(
+                    "INSERT INTO chat_messages (role, content) VALUES ('user', 'hello')",
+                    params![],
+                )
+                .unwrap();
+                conn.execute_batch("PRAGMA user_version = 0;").unwrap();
+            }
+
+            let conn = init_db().unwrap();
+
+            // Existing data untouched.
+            let title: String = conn
+                .query_row("SELECT title FROM notes WHERE id = 1", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(title, "keep");
+            let summaries: i64 = conn
+                .query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(summaries, 1);
+
+            // Columns backfilled.
+            assert!(column_exists(&conn, "notes", "anchor").unwrap());
+            assert!(column_exists(&conn, "chat_messages", "session_id").unwrap());
+
+            // One default session exists and the orphaned message was attached to it.
+            let sessions: i64 = conn
+                .query_row("SELECT COUNT(*) FROM chat_sessions", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(sessions, 1);
+            let orphan: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(orphan, 1);
+        });
+    }
+
+    #[test]
+    fn foreign_keys_enforce_set_null_on_document_delete() {
+        with_temp_dir(|_| {
+            let conn = init_db().unwrap();
+            conn.execute(
+                "INSERT INTO documents (title, file_path, content, content_preview, file_type, size)
+                 VALUES ('doc', '/tmp/d', 'c', 'c', 'txt', 1)",
+                params![],
+            )
+            .unwrap();
+            let doc_id = conn.last_insert_rowid();
+            conn.execute(
+                "INSERT INTO notes (title, content, document_id) VALUES ('note', 'c', ?1)",
+                params![doc_id],
+            )
+            .unwrap();
+            conn.execute("DELETE FROM documents WHERE id = ?1", params![doc_id])
+                .unwrap();
+
+            let doc_id: Option<i64> = conn
+                .query_row("SELECT document_id FROM notes WHERE id = 1", [], |r| r.get(0))
+                .unwrap();
+            assert!(doc_id.is_none());
+        });
+    }
 }

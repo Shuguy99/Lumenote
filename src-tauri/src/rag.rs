@@ -141,3 +141,63 @@ pub fn build_context(documents: &[(String, String)], query: &str, max_tokens: us
     }
     context
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunking_splits_by_newlines_and_respects_overlap() {
+        let content = (1..=200)
+            .map(|i| format!("Строка номер {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let chunks = split_into_chunks(&content);
+        assert!(chunks.len() > 1);
+        assert!(chunks.len() <= MAX_CHUNKS_PER_DOC);
+        // Every chunk fits the budget.
+        for c in &chunks {
+            assert!(c.chars().count() <= CHUNK_SIZE);
+        }
+        // Overlap keeps continuity between consecutive chunks: the next chunk
+        // must start with the tail of the previous one.
+        if chunks.len() > 1 {
+            let tail: String = chunks[0]
+                .chars()
+                .skip(chunks[0].chars().count().saturating_sub(CHUNK_OVERLAP))
+                .collect();
+            let head: String = chunks[1].chars().take(CHUNK_OVERLAP).collect();
+            assert_eq!(tail, head);
+        }
+    }
+
+    #[test]
+    fn empty_content_yields_no_chunks() {
+        assert!(split_into_chunks("").is_empty());
+        assert!(split_into_chunks("   \n  ").is_empty());
+    }
+
+    #[test]
+    fn selection_ranks_relevant_chunks_first() {
+        let chunks: Vec<(String, Vec<String>)> = vec![(
+            "Документ А".into(),
+            vec![
+                "Кошки любят веселье и забавы".into(),
+                "Собаки охраняют дом".into(),
+            ],
+        )];
+        let selected = select_relevant(&chunks, "кошки", 4000);
+        assert!(!selected.is_empty());
+        assert_eq!(selected[0].1, "Кошки любят веселье и забавы");
+    }
+
+    #[test]
+    fn empty_tokens_fall_back_to_first_chunks() {
+        let chunks: Vec<(String, Vec<String>)> = vec![(
+            "Док".into(),
+            vec!["один".into(), "два".into(), "три".into()],
+        )];
+        let selected = select_relevant(&chunks, "", 4000);
+        assert_eq!(selected.len(), 2);
+    }
+}

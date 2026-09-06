@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import { useAppStore } from "../store";
 import { exportApi } from "../api";
 import { findTextOffset } from "../anchors";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 const CITATION_RE = /\[Doc:\s*([^\]]+)\]/g;
 
@@ -36,7 +37,17 @@ function CitationLink({
   const { documents, selectDocument, setError } = useAppStore();
 
   if (!href.startsWith("cite://")) {
-    return <a href={href}>{children}</a>;
+    return (
+      <a
+        href={href}
+        onClick={(e) => {
+          e.preventDefault();
+          openUrl(href).catch((err) => setError(String(err)));
+        }}
+      >
+        {children}
+      </a>
+    );
   }
 
   const handleClick = () => {

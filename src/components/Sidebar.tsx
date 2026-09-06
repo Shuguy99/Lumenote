@@ -190,10 +190,9 @@ export default function Sidebar() {
                 <p className="text-xs font-medium text-blue-700 dark:text-blue-400 truncate">
                   {r.title}
                 </p>
-                <p
-                  className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2 break-words"
-                  dangerouslySetInnerHTML={{ __html: r.snippet }}
-                />
+                <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2 break-words">
+                  {r.snippet}
+                </p>
               </button>
             ))}
           </div>
