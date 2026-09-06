@@ -5,9 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
-use tauri_plugin_shell::process::{Command, CommandChild};
-
+use tauri::{AppHandle, Emitter, Manager};
 use crate::db;
 
 pub const SERVER_PORT: u16 = 8080;
@@ -33,7 +31,7 @@ pub struct LocalAiStatus {
 }
 
 pub struct LocalAiManager {
-    pub child: Mutex<Option<CommandChild>>,
+    pub child: Mutex<Option<std::process::Child>>,
     pub status: Mutex<LocalAiStatus>,
 }
 
@@ -114,7 +112,7 @@ pub async fn download_local_ai(app: AppHandle) -> Result<(), String> {
         }
         if let Err(e) = extract_engine(&zip_path, &engine_path()) {
             let _ = fs::remove_file(&zip_path);
-            set_error(&app, "engine", e);
+            set_error(&app, "engine", e.clone());
             return Err(format!("Ошибка распаковки движка: {}", e));
         }
         let _ = fs::remove_file(&zip_path);
@@ -296,7 +294,7 @@ pub async fn start_local_server(app: AppHandle) -> Result<(), String> {
         "--api-key".to_string(),
         "local".to_string(),
     ];
-    let child = Command::new(engine_path())
+    let child = std::process::Command::new(engine_path())
         .args(args)
         .spawn()
         .map_err(|e| format!("Не удалось запустить llama-server: {}", e))?;
@@ -332,7 +330,7 @@ pub async fn start_local_server(app: AppHandle) -> Result<(), String> {
 
 fn kill_engine(app: &AppHandle) {
     if let Some(manager) = app.try_state::<LocalAiManager>() {
-        if let Some(child) = manager.child.lock().unwrap().take() {
+        if let Some(mut child) = manager.child.lock().unwrap().take() {
             let _ = child.kill();
         }
     }

@@ -134,16 +134,6 @@ pub fn render_context(chunked: &[(String, Vec<String>)], selected: &[(usize, Str
     context
 }
 
-pub fn build_context(documents: &[(String, String)], query: &str, max_tokens: usize) -> String {
-    let mut chunked: Vec<(String, Vec<String>)> = Vec::new();
-    for (title, content) in documents {
-        chunked.push((title.clone(), split_into_chunks(content)));
-    }
-
-    let selected = select_relevant(&chunked, query, max_tokens);
-    render_context(&chunked, &selected)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
