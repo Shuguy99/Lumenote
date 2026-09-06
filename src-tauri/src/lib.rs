@@ -2,6 +2,7 @@ mod ai;
 mod commands;
 mod db;
 mod export;
+mod local_ai;
 mod parser;
 mod rag;
 
@@ -13,6 +14,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_shell::init())
+        .manage(local_ai::LocalAiManager::default())
         .invoke_handler(tauri::generate_handler![
             commands::load_documents,
             commands::add_document,
@@ -42,7 +45,16 @@ pub fn run() {
             commands::export_chat_md,
             commands::export_chat_pdf,
             commands::export_notes_pdf,
+            commands::local_ai_status,
+            commands::download_local_ai,
+            commands::start_local_ai_server,
+            commands::stop_local_ai_server,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                local_ai::kill_local_server(app_handle);
+            }
+        });
 }

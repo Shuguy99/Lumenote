@@ -93,6 +93,17 @@ export interface SearchResult {
   match_index: number;
 }
 
+export interface LocalAiStatus {
+  state: string;
+  phase: string;
+  progress: number | null;
+  downloaded_mb: number | null;
+  total_mb: number | null;
+  error: string | null;
+  model_path: string | null;
+  port: number;
+}
+
 export interface ThemeSettings {
   theme: "light" | "dark";
 }

@@ -7,6 +7,7 @@ pub enum Provider {
     OpenAI,
     Anthropic,
     Ollama,
+    Local,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -37,14 +38,26 @@ impl AiSettings {
         match self.provider.as_str() {
             "anthropic" => Provider::Anthropic,
             "ollama" => Provider::Ollama,
+            "local" => Provider::Local,
             _ => Provider::OpenAI,
         }
     }
 }
 
+const LOCAL_BASE_URL: &str = "http://127.0.0.1:8080/v1";
+
+fn local_effective_settings(settings: &AiSettings) -> AiSettings {
+    let mut s = settings.clone();
+    s.base_url = Some(LOCAL_BASE_URL.to_string());
+    if s.api_key.is_empty() {
+        s.api_key = "local".to_string();
+    }
+    s
+}
+
 fn default_headers(provider: &Provider, api_key: &str) -> Vec<(String, String)> {
     match provider {
-        Provider::OpenAI | Provider::Ollama => {
+        Provider::OpenAI | Provider::Ollama | Provider::Local => {
             let mut h = vec![("Content-Type".into(), "application/json".into())];
             if !api_key.is_empty() {
                 h.push(("Authorization".into(), format!("Bearer {}", api_key)));
@@ -137,6 +150,11 @@ async fn run_chat_completion(
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
+    if provider == Provider::Local {
+        let effective = local_effective_settings(settings);
+        return openai_chat(&client, &effective, &mut api_messages).await;
+    }
+
     match provider {
         Provider::OpenAI => {
             openai_chat(&client, settings, &mut api_messages).await
@@ -147,6 +165,7 @@ async fn run_chat_completion(
         Provider::Ollama => {
             ollama_chat(&client, settings, &mut api_messages).await
         }
+        Provider::Local => unreachable!(),
     }
 }
 
@@ -355,10 +374,16 @@ pub async fn stream_chat_completion(
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
+    if provider == Provider::Local {
+        let effective = local_effective_settings(settings);
+        return openai_stream(&client, &effective, &mut api_messages, &channel).await;
+    }
+
     match provider {
         Provider::OpenAI => openai_stream(&client, settings, &mut api_messages, &channel).await,
         Provider::Anthropic => anthropic_stream(&client, settings, &mut api_messages, &channel).await,
         Provider::Ollama => ollama_stream(&client, settings, &mut api_messages, &channel).await,
+        Provider::Local => unreachable!(),
     }
 }
 
@@ -608,10 +633,22 @@ pub async fn test_provider_connection(
     let provider_enum = match provider {
         "anthropic" => Provider::Anthropic,
         "ollama" => Provider::Ollama,
+        "local" => Provider::Local,
         _ => Provider::OpenAI,
     };
 
     let (url, headers) = match provider_enum {
+        Provider::Local => {
+            let base = base_url
+                .clone()
+                .unwrap_or_else(|| "http://127.0.0.1:8080".to_string());
+            let base = base.trim_end_matches('/');
+            let base = base.strip_suffix("/v1").unwrap_or(base);
+            (
+                format!("{}/health", base),
+                default_headers(&Provider::Local, "local"),
+            )
+        }
         Provider::OpenAI => {
             let base = base_url
                 .clone()

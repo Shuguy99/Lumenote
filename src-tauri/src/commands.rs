@@ -1,10 +1,13 @@
 use crate::ai::{self, AiSettings};
 use crate::db::{self, ChatMessage, Document, Note};
+use crate::local_ai;
 use crate::parser;
 use crate::rag;
 
 fn open_conn() -> Result<rusqlite::Connection, String> {
-    rusqlite::Connection::open(db::db_path()).map_err(|e| e.to_string())
+    let conn = rusqlite::Connection::open(db::db_path()).map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;").map_err(|e| e.to_string())?;
+    Ok(conn)
 }
 
 fn extract_settings(conn: &rusqlite::Connection) -> Result<AiSettings, String> {
@@ -143,7 +146,7 @@ async fn generate_summary_internal(settings: &AiSettings, doc: &Document) -> Res
 
     let summary = ai::chat_completion(settings, &messages, &vec![]).await?;
 
-    if let Ok(conn) = rusqlite::Connection::open(db::db_path()) {
+    if let Ok(conn) = open_conn() {
         let _ = db::update_document_summary(&conn, doc.id, &summary);
     }
     Ok(())
@@ -307,7 +310,10 @@ pub async fn send_chat_message(
     let settings = extract_settings(&conn)?;
     drop(conn);
 
-    if settings.api_key.is_empty() && settings.provider != "ollama" {
+    if settings.api_key.is_empty()
+        && settings.provider != "ollama"
+        && settings.provider != "local"
+    {
         return Err("AI API key is not configured. Open Settings to configure it.".to_string());
     }
 
@@ -349,8 +355,18 @@ pub async fn stream_chat_message(
     let settings = extract_settings(&conn)?;
     drop(conn);
 
-    if settings.api_key.is_empty() && settings.provider != "ollama" {
+    if settings.api_key.is_empty()
+        && settings.provider != "ollama"
+        && settings.provider != "local"
+    {
         return Err("AI API key is not configured. Open Settings to configure it.".to_string());
+    }
+
+    if settings.provider == "local" && !local_ai::is_server_ready().await {
+        return Err(
+            "Встроенная модель не запущена. Откройте «Настройки AI» и нажмите «Запустить встроенную модель»."
+                .to_string(),
+        );
     }
 
     let context = rag::build_context(&docs, &message, 3000);
@@ -400,7 +416,7 @@ pub fn get_settings() -> Result<serde_json::Value, String> {
         "provider": settings.provider,
         "api_key_masked": masked(&settings.api_key),
         "has_api_key": !settings.api_key.is_empty(),
-        "api_key": settings.api_key,
+        "api_key": "",
         "model": settings.model,
         "base_url": settings.base_url,
         "temperature": settings.temperature,
@@ -419,7 +435,12 @@ pub fn save_settings(
 ) -> Result<(), String> {
     let conn = open_conn()?;
     db::set_setting(&conn, "ai_provider", &provider).map_err(|e| e.to_string())?;
-    db::set_setting(&conn, "ai_api_key", &api_key).map_err(|e| e.to_string())?;
+    let existing_key = db::get_setting(&conn, "ai_api_key")
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    if !api_key.is_empty() || existing_key.is_empty() {
+        db::set_setting(&conn, "ai_api_key", &api_key).map_err(|e| e.to_string())?;
+    }
     db::set_setting(&conn, "ai_model", &model).map_err(|e| e.to_string())?;
     if let Some(bu) = &base_url {
         db::set_setting(&conn, "ai_base_url", bu).map_err(|e| e.to_string())?;
@@ -435,7 +456,15 @@ pub async fn test_provider_connection(
     api_key: String,
     base_url: Option<String>,
 ) -> Result<String, String> {
-    ai::test_provider_connection(&provider, &api_key, base_url).await
+    let effective_key = if api_key.trim().is_empty() {
+        let conn = open_conn()?;
+        db::get_setting(&conn, "ai_api_key")
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default()
+    } else {
+        api_key.trim().to_string()
+    };
+    ai::test_provider_connection(&provider, &effective_key, base_url).await
 }
 
 #[tauri::command]
@@ -530,4 +559,24 @@ pub fn export_notes_pdf(note_ids: Vec<i64>, path: String) -> Result<(), String> 
     }
     drop(conn);
     crate::export::export_pdf(&out, &path)
+}
+
+#[tauri::command]
+pub async fn local_ai_status(app: tauri::AppHandle) -> local_ai::LocalAiStatus {
+    local_ai::get_local_ai_status(app).await
+}
+
+#[tauri::command]
+pub fn download_local_ai(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(local_ai::download_local_ai(app));
+}
+
+#[tauri::command]
+pub async fn start_local_ai_server(app: tauri::AppHandle) -> Result<(), String> {
+    local_ai::start_local_server(app).await
+}
+
+#[tauri::command]
+pub async fn stop_local_ai_server(app: tauri::AppHandle) -> Result<(), String> {
+    local_ai::stop_local_server(app).await
 }

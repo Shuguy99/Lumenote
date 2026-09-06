@@ -1,10 +1,12 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import type {
   AiSettings,
   ChatMessage,
   ChatSession,
   Document,
+  LocalAiStatus,
   Note,
   SaveSettingsInput,
   SearchResult,
@@ -154,4 +156,13 @@ export const settingsApi = {
   ) => invoke<string>("test_provider_connection", { provider, apiKey, baseUrl }),
   ollamaModels: (baseUrl: string | null) =>
     invoke<string[]>("list_ollama_models", { baseUrl }),
+};
+
+export const localAiApi = {
+  status: () => invoke<LocalAiStatus>("local_ai_status"),
+  download: () => invoke<void>("download_local_ai"),
+  start: () => invoke<void>("start_local_ai_server"),
+  stop: () => invoke<void>("stop_local_ai_server"),
+  onStatus: (callback: (status: LocalAiStatus) => void) =>
+    listen<LocalAiStatus>("local-ai-status", (event) => callback(event.payload)),
 };
