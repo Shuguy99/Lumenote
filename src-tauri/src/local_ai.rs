@@ -16,6 +16,7 @@ const MODEL_FILENAME: &str = "qwen2.5-1.5b-instruct-q4_k_m.gguf";
 const MODEL_URL: &str = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf";
 const ENGINE_LATEST_API: &str =
     "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest";
+const ENGINE_NIGHTLY_TAG_FILE: &str = "nightly-tag.txt";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -144,22 +145,30 @@ fn set_error(app: &AppHandle, phase: &str, error: impl Into<String>) {
     build_status(app, status);
 }
 
-async fn resolve_engine_url() -> Result<String, String> {
-    let client = reqwest::Client::new();
+async fn get_github_json(
+    client: &reqwest::Client,
+    url: &str,
+    what: &str,
+) -> Result<serde_json::Value, String> {
     let resp = client
-        .get(ENGINE_LATEST_API)
+        .get(url)
         .header("User-Agent", "Lumenote/0.1")
         .send()
         .await
-        .map_err(|e| format!("GitHub API request failed: {}", e))?;
+        .map_err(|e| format!("GitHub API request for {} failed: {}", what, e))?;
     if !resp.status().is_success() {
-        return Err(format!("GitHub API returned HTTP {}", resp.status()));
+        return Err(format!(
+            "GitHub API returned HTTP {} for {}",
+            resp.status(),
+            what
+        ));
     }
-    let json: serde_json::Value =
-        resp.json().await.map_err(|e| format!("GitHub API parse failed: {}", e))?;
-    let assets = json["assets"]
-        .as_array()
-        .ok_or_else(|| "GitHub API: no assets".to_string())?;
+    resp.json()
+        .await
+        .map_err(|e| format!("GitHub API parse failed for {}: {}", what, e))
+}
+
+fn find_engine_asset(assets: &[serde_json::Value]) -> Result<Option<String>, String> {
     for asset in assets {
         let name = asset["name"].as_str().unwrap_or("");
         if name.contains("bin-win-cpu-x64")
@@ -168,10 +177,72 @@ async fn resolve_engine_url() -> Result<String, String> {
             let url = asset["browser_download_url"]
                 .as_str()
                 .ok_or_else(|| "GitHub API: missing download url".to_string())?;
-            return Ok(url.to_string());
+            return Ok(Some(url.to_string()));
         }
     }
-    Err("GitHub API: CPU release not found".to_string())
+    Ok(None)
+}
+
+async fn resolve_engine_url() -> Result<String, String> {
+    let client = reqwest::Client::new();
+
+    let latest = get_github_json(&client, ENGINE_LATEST_API, "latest release").await?;
+    let assets = latest["assets"]
+        .as_array()
+        .ok_or_else(|| "GitHub API: no assets in latest release".to_string())?;
+
+    if let Some(url) = find_engine_asset(assets)? {
+        return Ok(url);
+    }
+
+    let nightly_tag = {
+        let file = assets
+            .iter()
+            .find(|a| a["name"].as_str() == Some(ENGINE_NIGHTLY_TAG_FILE))
+            .ok_or_else(|| "GitHub API: latest release has no binaries".to_string())?;
+        let file_url = file["browser_download_url"]
+            .as_str()
+            .ok_or_else(|| "GitHub API: nightly-tag.txt has no download url".to_string())?;
+        let tag = client
+            .get(file_url)
+            .header("User-Agent", "Lumenote/0.1")
+            .send()
+            .await
+            .map_err(|e| format!("GitHub API: failed to fetch nightly tag: {}", e))?
+            .text()
+            .await
+            .map_err(|e| format!("GitHub API: failed to read nightly tag: {}", e))?;
+        tag.trim().to_string()
+    };
+
+    if !nightly_tag.is_empty() {
+        let nightly_url = format!(
+            "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{}",
+            nightly_tag
+        );
+        if let Ok(json) = get_github_json(&client, &nightly_url, "nightly release").await {
+            if let Some(assets) = json["assets"].as_array() {
+                if let Some(url) = find_engine_asset(assets)? {
+                    return Ok(url);
+                }
+            }
+        }
+    }
+
+    let recent_url = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10";
+    if let Ok(json) = get_github_json(&client, recent_url, "recent releases").await {
+        if let Some(list) = json.as_array() {
+            for release in list {
+                if let Some(assets) = release["assets"].as_array() {
+                    if let Some(url) = find_engine_asset(assets)? {
+                        return Ok(url);
+                    }
+                }
+            }
+        }
+    }
+
+    Err("GitHub API: CPU build not found in llama.cpp releases".to_string())
 }
 
 async fn download_file(
