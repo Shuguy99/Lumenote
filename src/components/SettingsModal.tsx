@@ -161,20 +161,20 @@ export default function SettingsModal({ open, onClose }: Props) {
       if (settings.provider === "local") {
         await settingsApi.save({
           provider: "local",
-          api_key: "",
+          apiKey: "",
           model: "qwen2.5-1.5b-instruct",
-          base_url: "http://127.0.0.1:8090/v1",
+          baseUrl: "http://127.0.0.1:8090/v1",
           temperature: settings.temperature,
-          max_tokens: Math.max(128, Math.min(16000, settings.max_tokens)),
+          maxTokens: Math.max(128, Math.min(16000, settings.max_tokens)),
         });
       } else {
         await settingsApi.save({
           provider: settings.provider,
-          api_key: settings.api_key.trim(),
+          apiKey: settings.api_key.trim(),
           model: settings.model.trim() || "gpt-4o",
-          base_url: baseUrl,
+          baseUrl: baseUrl,
           temperature: settings.temperature,
-          max_tokens: Math.max(128, Math.min(16000, settings.max_tokens)),
+          maxTokens: Math.max(128, Math.min(16000, settings.max_tokens)),
         });
       }
       setSaved(true);

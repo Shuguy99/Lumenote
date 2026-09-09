@@ -79,11 +79,11 @@ export interface AiSettings {
 
 export interface SaveSettingsInput {
   provider: string;
-  api_key: string;
+  apiKey: string;
   model: string;
-  base_url?: string | null;
+  baseUrl?: string | null;
   temperature: number;
-  max_tokens: number;
+  maxTokens: number;
 }
 
 export interface SearchResult {
