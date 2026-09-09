@@ -89,14 +89,16 @@ fn documents_as_context(documents: &Vec<(String, String)>) -> String {
 
 fn build_system_prompt(context: &str) -> String {
     if context.trim().is_empty() {
-        return "You are a helpful AI assistant in a notebook application. Answer concisely and accurately.".to_string();
+        return "You are a helpful AI assistant in a notebook application. Answer concisely and accurately. Always answer in the same language as the user's question.".to_string();
     }
 
     let mut prompt = String::from(
         "You are an AI assistant inside a notebook application. \
          The user has uploaded the following documents. Answer questions BASED ONLY on these \
-         documents. When you use information from a document, cite it at the end in parentheses \
-         like [Doc: <document_title>]. If the answer isn't in the documents, say so clearly.\n\n\
+         documents. Always answer in the same language as the user's question, regardless of \
+         the language of the documents. When you use information from a document, cite it at \
+         the end in parentheses like [Doc: <document_title>]. If the answer isn't in the \
+         documents, say so clearly.\n\n\
          === DOCUMENTS ===\n",
     );
 
@@ -178,12 +180,21 @@ async fn openai_chat(
         .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
-    let body = json!({
+    let is_local = settings.get_provider() == Provider::Local;
+    let temperature = if is_local {
+        settings.temperature.min(0.4)
+    } else {
+        settings.temperature
+    };
+    let mut body = json!({
         "model": settings.model,
         "messages": messages,
-        "temperature": settings.temperature,
+        "temperature": temperature,
         "max_tokens": settings.max_tokens
     });
+    if is_local {
+        body["repeat_penalty"] = json!(1.15);
+    }
 
     let resp = client
         .post(&url)
@@ -397,13 +408,22 @@ async fn openai_stream(
         .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
-    let body = json!({
+    let is_local = settings.get_provider() == Provider::Local;
+    let temperature = if is_local {
+        settings.temperature.min(0.4)
+    } else {
+        settings.temperature
+    };
+    let mut body = json!({
         "model": settings.model,
         "messages": messages,
-        "temperature": settings.temperature,
+        "temperature": temperature,
         "max_tokens": settings.max_tokens,
         "stream": true
     });
+    if is_local {
+        body["repeat_penalty"] = json!(1.15);
+    }
 
     let resp = client
         .post(&url)
