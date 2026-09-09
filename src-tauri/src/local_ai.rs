@@ -8,8 +8,35 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use crate::db;
 
-pub const SERVER_PORT: u16 = 8090;
-pub const SERVER_BASE: &str = "http://127.0.0.1:8090";
+pub const DEFAULT_SERVER_PORT: u16 = 8090;
+const ENGINE_IMPL_FILENAME: &str = "llama-server-impl.dll";
+
+static ACTIVE_PORT: Mutex<Option<u16>> = Mutex::new(None);
+
+pub fn current_port() -> u16 {
+    ACTIVE_PORT.lock().unwrap().unwrap_or(DEFAULT_SERVER_PORT)
+}
+
+fn port_is_set() -> bool {
+    ACTIVE_PORT.lock().unwrap().is_some()
+}
+
+fn set_current_port(port: u16) {
+    *ACTIVE_PORT.lock().unwrap() = Some(port);
+}
+
+pub fn pick_free_port() -> u16 {
+    if let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:0") {
+        if let Ok(addr) = listener.local_addr() {
+            return addr.port();
+        }
+    }
+    DEFAULT_SERVER_PORT
+}
+
+pub fn current_local_base_url() -> String {
+    format!("http://127.0.0.1:{}/v1", current_port())
+}
 
 const ENGINE_FILENAME: &str = "llama-server.exe";
 const MODEL_FILENAME: &str = "qwen2.5-1.5b-instruct-q4_k_m.gguf";
@@ -45,7 +72,7 @@ fn idle_status() -> LocalAiStatus {
         total_mb: None,
         error: None,
         model_path: None,
-        port: SERVER_PORT,
+        port: DEFAULT_SERVER_PORT,
     }
 }
 
@@ -64,6 +91,11 @@ pub fn engine_path() -> PathBuf {
 
 pub fn model_path() -> PathBuf {
     db::app_data_dir().join("models").join(MODEL_FILENAME)
+}
+
+fn engine_complete() -> bool {
+    let engine = db::app_data_dir().join("engine");
+    engine.join(ENGINE_FILENAME).exists() && engine.join(ENGINE_IMPL_FILENAME).exists()
 }
 
 fn build_status(app: &AppHandle, status: LocalAiStatus) {
@@ -95,7 +127,7 @@ pub async fn download_local_ai(app: AppHandle) -> Result<(), String> {
     status.error = None;
     build_status(&app, status);
 
-    if !engine_path().exists() {
+    if !engine_complete() {
         let engine_url = match resolve_engine_url().await {
             Ok(url) => url,
             Err(e) => {
@@ -111,7 +143,7 @@ pub async fn download_local_ai(app: AppHandle) -> Result<(), String> {
             set_error(&app, "engine", e);
             return Err("Не удалось скачать движок llama-server".to_string());
         }
-        if let Err(e) = extract_engine(&zip_path, &engine_path()) {
+        if let Err(e) = extract_engine(&zip_path, &engine_dir) {
             let _ = fs::remove_file(&zip_path);
             set_error(&app, "engine", e.clone());
             return Err(format!("Ошибка распаковки движка: {}", e));
@@ -293,19 +325,31 @@ async fn download_file(
     Ok(())
 }
 
-fn extract_engine(zip_path: &Path, dest: &Path) -> Result<(), String> {
+fn extract_engine(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
     let file = File::open(zip_path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let mut found_server = false;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
         let name = entry.name().to_string();
-        if name.ends_with("llama-server.exe") {
-            let mut out = File::create(dest).map_err(|e| e.to_string())?;
-            std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
-            return Ok(());
+        let file_name = Path::new(&name)
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if file_name.is_empty() {
+            continue;
+        }
+        let out_path = dest_dir.join(&file_name);
+        let mut out = File::create(&out_path).map_err(|e| e.to_string())?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+        if file_name == ENGINE_FILENAME {
+            found_server = true;
         }
     }
-    Err("llama-server.exe not found in archive".to_string())
+    if !found_server {
+        return Err("llama-server.exe not found in archive".to_string());
+    }
+    Ok(())
 }
 
 pub async fn is_server_ready() -> bool {
@@ -316,7 +360,7 @@ pub async fn is_server_ready() -> bool {
         return false;
     };
     client
-        .get(format!("{SERVER_BASE}/health"))
+        .get(format!("http://127.0.0.1:{}/health", current_port()))
         .send()
         .await
         .map(|r| r.status().is_success())
@@ -342,9 +386,13 @@ pub async fn start_local_server(app: AppHandle) -> Result<(), String> {
     if has_child {
         return Err("Сервер уже запущен".to_string());
     }
+    if !port_is_set() {
+        set_current_port(pick_free_port());
+    }
     if is_server_ready().await {
         let mut status = current_status(&app);
         status.state = "running".to_string();
+        status.port = current_port();
         status.error = None;
         build_status(&app, status);
         return Ok(());
@@ -357,7 +405,7 @@ pub async fn start_local_server(app: AppHandle) -> Result<(), String> {
         "--host".to_string(),
         "127.0.0.1".to_string(),
         "--port".to_string(),
-        SERVER_PORT.to_string(),
+        current_port().to_string(),
         "--ctx-size".to_string(),
         "8192".to_string(),
         "--n-gpu-layers".to_string(),
@@ -424,7 +472,8 @@ pub async fn stop_local_server(app: AppHandle) -> Result<(), String> {
 
 pub async fn get_local_ai_status(app: AppHandle) -> LocalAiStatus {
     let mut status = current_status(&app);
-    let engine_ok = engine_path().exists();
+    status.port = current_port();
+    let engine_ok = engine_complete();
     let model_ok = model_path().exists();
 
     if !engine_ok || !model_ok {

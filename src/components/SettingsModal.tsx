@@ -285,7 +285,7 @@ export default function SettingsModal({ open, onClose }: Props) {
               <div className="mt-3 flex items-center gap-2.5">
                 <span className="w-2 h-2 rounded-full bg-emerald-500" />
                 <span className="text-xs text-emerald-700">
-                  Сервер работает (http://127.0.0.1:8090)
+                  Сервер работает (localhost:автопорт)
                 </span>
                 <button
                   onClick={handleStopLocal}

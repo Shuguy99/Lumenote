@@ -44,11 +44,9 @@ impl AiSettings {
     }
 }
 
-const LOCAL_BASE_URL: &str = "http://127.0.0.1:8090/v1";
-
 fn local_effective_settings(settings: &AiSettings) -> AiSettings {
     let mut s = settings.clone();
-    s.base_url = Some(LOCAL_BASE_URL.to_string());
+    s.base_url = Some(crate::local_ai::current_local_base_url());
     if s.api_key.is_empty() {
         s.api_key = "local".to_string();
     }
@@ -641,7 +639,7 @@ pub async fn test_provider_connection(
         Provider::Local => {
             let base = base_url
                 .clone()
-                .unwrap_or_else(|| "http://127.0.0.1:8090".to_string());
+                .unwrap_or_else(crate::local_ai::current_local_base_url);
             let base = base.trim_end_matches('/');
             let base = base.strip_suffix("/v1").unwrap_or(base);
             (
