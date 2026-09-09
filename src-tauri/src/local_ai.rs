@@ -8,8 +8,8 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use crate::db;
 
-pub const SERVER_PORT: u16 = 8080;
-pub const SERVER_BASE: &str = "http://127.0.0.1:8080";
+pub const SERVER_PORT: u16 = 8090;
+pub const SERVER_BASE: &str = "http://127.0.0.1:8090";
 
 const ENGINE_FILENAME: &str = "llama-server.exe";
 const MODEL_FILENAME: &str = "qwen2.5-1.5b-instruct-q4_k_m.gguf";

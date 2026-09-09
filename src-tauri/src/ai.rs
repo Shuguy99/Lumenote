@@ -44,7 +44,7 @@ impl AiSettings {
     }
 }
 
-const LOCAL_BASE_URL: &str = "http://127.0.0.1:8080/v1";
+const LOCAL_BASE_URL: &str = "http://127.0.0.1:8090/v1";
 
 fn local_effective_settings(settings: &AiSettings) -> AiSettings {
     let mut s = settings.clone();
@@ -641,7 +641,7 @@ pub async fn test_provider_connection(
         Provider::Local => {
             let base = base_url
                 .clone()
-                .unwrap_or_else(|| "http://127.0.0.1:8080".to_string());
+                .unwrap_or_else(|| "http://127.0.0.1:8090".to_string());
             let base = base.trim_end_matches('/');
             let base = base.strip_suffix("/v1").unwrap_or(base);
             (
