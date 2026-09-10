@@ -89,21 +89,21 @@ fn documents_as_context(documents: &Vec<(String, String)>) -> String {
 
 fn build_system_prompt(context: &str) -> String {
     if context.trim().is_empty() {
-        return "You are a helpful AI assistant in a notebook application. Answer concisely and accurately. Always answer in the same language as the user's question.".to_string();
+        return "Ты — помощник в заметках. Отвечай кратко и точно. ОБЯЗАТЕЛЬНО отвечай на том же языке, на котором задан вопрос.".to_string();
     }
 
     let mut prompt = String::from(
-        "You are an AI assistant inside a notebook application. \
-         The user has uploaded the following documents. Answer questions BASED ONLY on these \
-         documents. Always answer in the same language as the user's question, regardless of \
-         the language of the documents. When you use information from a document, cite it at \
-         the end in parentheses like [Doc: <document_title>]. If the answer isn't in the \
-         documents, say so clearly.\n\n\
-         === DOCUMENTS ===\n",
+        "Ты — помощник в заметках. ОБЯЗАТЕЛЬНО отвечай на том же языке, на котором задан вопрос. \
+         Если вопрос на русском — отвечай на русском. Если на английском — на английском. \
+         Никогда не отвечай на языке документов, только на языке вопроса.\n\n\
+         Используй информацию ТОЛЬКО из документов ниже. \
+         В конце ответа укажи источник в формате [Документ: <название>]. \
+         Если ответа нет в документах — скажи об этом.\n\n\
+         === ДОКУМЕНТЫ ===\n",
     );
 
     prompt.push_str(context);
-    prompt.push_str("\n=== END DOCUMENTS ===\n");
+    prompt.push_str("\n=== КОНЕЦ ДОКУМЕНТОВ ===\n");
 
     prompt
 }
