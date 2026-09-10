@@ -50,6 +50,7 @@ pub fn run() {
             commands::local_ai_status,
             commands::download_local_ai,
             commands::start_local_ai_server,
+            commands::auto_start_local_server,
             commands::stop_local_ai_server,
         ])
         .build(tauri::generate_context!())

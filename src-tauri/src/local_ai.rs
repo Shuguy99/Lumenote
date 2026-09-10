@@ -39,8 +39,8 @@ pub fn current_local_base_url() -> String {
 }
 
 const ENGINE_FILENAME: &str = "llama-server.exe";
-const MODEL_FILENAME: &str = "qwen2.5-1.5b-instruct-q4_k_m.gguf";
-const MODEL_URL: &str = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf";
+const MODEL_FILENAME: &str = "qwen2.5-7b-instruct-q4_k_m.gguf";
+const MODEL_URL: &str = "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf";
 const ENGINE_LATEST_API: &str =
     "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest";
 const ENGINE_NIGHTLY_TAG_FILE: &str = "nightly-tag.txt";
@@ -154,7 +154,7 @@ pub async fn download_local_ai(app: AppHandle) -> Result<(), String> {
     if !model_path().exists() {
         if let Err(e) = download_file(&app, MODEL_URL, &model_path(), "model", None).await {
             set_error(&app, "model", e);
-            return Err("Не удалось скачать модель Qwen 1.5B".to_string());
+            return Err("Не удалось скачать модель Qwen 7B".to_string());
         }
     }
 

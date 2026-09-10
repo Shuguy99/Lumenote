@@ -6,6 +6,7 @@ import NotesEditor from "./components/NotesEditor";
 import ChatPanel from "./components/ChatPanel";
 import SettingsModal from "./components/SettingsModal";
 import { useAppStore } from "./store";
+import { localAiApi } from "./api";
 
 export default function App() {
   const { loadAll, addDocument, selectedDocumentId, selectedNoteId, theme, toggleTheme, createNote, setCitation } =
@@ -15,6 +16,7 @@ export default function App() {
 
   useEffect(() => {
     loadAll();
+    localAiApi.autoStart();
   }, []);
 
   useEffect(() => {

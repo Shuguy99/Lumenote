@@ -724,6 +724,22 @@ pub async fn start_local_ai_server(app: tauri::AppHandle) -> Result<(), String> 
 }
 
 #[tauri::command]
+pub async fn auto_start_local_server(app: tauri::AppHandle) -> Result<(), String> {
+    let conn = open_conn()?;
+    let provider = db::get_setting(&conn, "ai_provider")
+        .unwrap_or(Some("openai".into()));
+    drop(conn);
+    if provider.as_deref() != Some("local") {
+        return Ok(());
+    }
+    if !local_ai::engine_path().exists() || !local_ai::model_path().exists() {
+        return Ok(());
+    }
+    let _ = local_ai::start_local_server(app).await;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn stop_local_ai_server(app: tauri::AppHandle) -> Result<(), String> {
     local_ai::stop_local_server(app).await
 }

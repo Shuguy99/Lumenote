@@ -165,6 +165,7 @@ export const localAiApi = {
   download: () => invoke<void>("download_local_ai"),
   start: () => invoke<void>("start_local_ai_server"),
   stop: () => invoke<void>("stop_local_ai_server"),
+  autoStart: () => invoke<void>("auto_start_local_server"),
   onStatus: (callback: (status: LocalAiStatus) => void) =>
     listen<LocalAiStatus>("local-ai-status", (event) => callback(event.payload)),
 };

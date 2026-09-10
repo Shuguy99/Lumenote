@@ -162,7 +162,7 @@ export default function SettingsModal({ open, onClose }: Props) {
         await settingsApi.save({
           provider: "local",
           apiKey: "",
-          model: "qwen2.5-1.5b-instruct",
+          model: "qwen2.5-7b-instruct",
           baseUrl: "http://127.0.0.1:8090/v1",
           temperature: settings.temperature,
           maxTokens: Math.max(128, Math.min(16000, settings.max_tokens)),
@@ -339,7 +339,7 @@ export default function SettingsModal({ open, onClose }: Props) {
                             : p.id === "ollama"
                               ? "llama3"
                               : p.id === "local"
-                                ? "qwen2.5-1.5b-instruct"
+                                ? "qwen2.5-7b-instruct"
                                 : "gpt-4o",
                       }))
                     }
@@ -384,7 +384,7 @@ export default function SettingsModal({ open, onClose }: Props) {
             </label>
             {settings.provider === "local" ? (
               <p className="text-sm text-gray-500">
-                qwen2.5-1.5b-instruct{" "}
+                qwen2.5-7b-instruct{" "}
                 <span className="text-xs text-gray-400">
                   (загружается встроенным движком)
                 </span>
